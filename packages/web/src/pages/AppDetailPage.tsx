@@ -390,7 +390,7 @@ export default function AppDetailPage() {
                       </p>
                       {item.loadError ? (
                         <Badge variant="warning" className="ml-auto shrink-0">
-                          {t("installed.skillLoadFailed")}
+                          {t("installed.artifactLoadFailed")}
                         </Badge>
                       ) : null}
                     </div>
