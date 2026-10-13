@@ -787,9 +787,8 @@ async function activateRoutineDraft(
     return fallback("you are not permitted to create routines directly");
   }
 
-  // create_routine checks only that the target exists; run the same args check
-  // the card's "Turn it on" gets, so an auto-enabled routine can't be saved
-  // with args that fail on every fire.
+  // create_routine runs the same args check. Running it here first rejects a
+  // draft whose args fail on every fire before create_routine is called.
   const argsError = deps.validateArgs(draft.actionName, draft.args);
   if (argsError) {
     return text(
