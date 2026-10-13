@@ -157,6 +157,30 @@ describe("SharedCodexAccountService", () => {
     service.close();
   });
 
+  it("marks the login when account/read fails workspace routing discovery", async () => {
+    const rpc = new FakeAccountRpc();
+    rpc.queue("account/read", new Error("workspace routing discovery unauthorized (401)"));
+    let marked = false;
+    const markAuthRevoked = rs.fn(async () => {
+      marked = true;
+    });
+    const service = createService(rpc, {
+      markAuthRevoked,
+      readFileStatus: async () =>
+        marked
+          ? { loggedIn: false, authMode: "chatgpt", planType: "plus", needsReauth: true }
+          : { loggedIn: true, authMode: "chatgpt", planType: "plus" },
+    });
+
+    await expect(service.getStatus()).resolves.toMatchObject({
+      loggedIn: false,
+      authMode: "chatgpt",
+      needsReauth: true,
+    });
+    expect(markAuthRevoked).toHaveBeenCalledTimes(1);
+    service.close();
+  });
+
   it("marks a saved ChatGPT login that Codex reports as signed out", async () => {
     const rpc = new FakeAccountRpc();
     rpc.queue("account/read", { account: null, requiresOpenaiAuth: true });

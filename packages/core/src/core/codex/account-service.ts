@@ -179,6 +179,9 @@ export class SharedCodexAccountService implements CodexAccountService {
         refreshToken: true,
       });
     } catch (err) {
+      // A workspace routing 401 also matches. When the refresh succeeds but the
+      // workspace keeps refusing the account, the next refresh clears the mark,
+      // so the payer switches back and forth at each hourly status refresh.
       if (isCodexAuthRevokedError(err)) {
         await this.markAuthRevoked();
       } else {
