@@ -183,7 +183,7 @@ export class SharedCodexAccountService implements CodexAccountService {
       // workspace keeps refusing the account, the next refresh clears the mark,
       // so the payer switches back and forth at each hourly status refresh.
       if (isCodexAuthRevokedError(err)) {
-        await this.markAuthRevoked();
+        if (this.noLoginSince(loginStartEpoch)) await this.markAuthRevoked();
       } else {
         log.warn("codex account/read failed; using auth file fallback", {
           error: getErrorMessage(err),
@@ -206,16 +206,16 @@ export class SharedCodexAccountService implements CodexAccountService {
       !account &&
       fileStatus.authMode === "chatgpt" &&
       fileStatus.loggedIn &&
-      // A login that starts after account/read can write new tokens before
-      // markAuthRevoked reads auth.json, which would fingerprint the new token.
-      loginStartEpoch === this.loginStartEpoch &&
-      this.isLoginIdle()
+      this.noLoginSince(loginStartEpoch)
     ) {
       // This account/read asked Codex to refresh the login. As of Codex 0.160
       // it hides the account of a saved ChatGPT login only once a refresh of
       // that login failed permanently, and it never records a transient
-      // failure. Marking the login keeps the credits branch above, which
-      // cannot see the account, from reading it as signed in.
+      // failure. It also hides an auth.json written after the app-server
+      // started, which this marks too, and only a new sign-in clears that mark
+      // until Codex restarts and refreshes the token. Marking the login keeps
+      // the credits branch above, which cannot see the account, from reading
+      // it as signed in.
       await this.markAuthRevoked();
       return statusFromFile(await this.readFileStatus());
     }
@@ -250,6 +250,12 @@ export class SharedCodexAccountService implements CodexAccountService {
 
   private isLoginIdle(): boolean {
     return !this.activeLogin && !this.loginStartPending;
+  }
+
+  // A login that starts after account/read can write new tokens before
+  // markAuthRevoked reads auth.json, which would fingerprint the new token.
+  private noLoginSince(loginStartEpoch: number | null): boolean {
+    return loginStartEpoch === this.loginStartEpoch && this.isLoginIdle();
   }
 
   async getUsage(): Promise<AIToolUsageStatus | null> {

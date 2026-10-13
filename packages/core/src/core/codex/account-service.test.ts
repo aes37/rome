@@ -283,6 +283,33 @@ describe("SharedCodexAccountService", () => {
     service.close();
   });
 
+  it("does not mark tokens from a login that finished during a failed account/read", async () => {
+    const rpc = new FakeAccountRpc();
+    let failRead!: (error: Error) => void;
+    rpc.queue(
+      "account/read",
+      new Promise((_resolve, reject) => {
+        failRead = reject;
+      }),
+    );
+    rpc.queue("account/login/start", {
+      loginId: "device-1",
+      userCode: "ABCD-EFGH",
+      verificationUrl: "https://auth.openai.com/codex/device",
+    });
+    const markAuthRevoked = rs.fn(async () => {});
+    const service = createService(rpc, { markAuthRevoked });
+
+    const status = service.getStatus();
+    await service.startDeviceLogin();
+    rpc.notify("account/login/completed", { loginId: "device-1", success: true, error: null });
+    failRead(new Error("workspace routing discovery unauthorized (401)"));
+
+    await expect(status).resolves.toMatchObject({ loggedIn: true, authMode: "chatgpt" });
+    expect(markAuthRevoked).not.toHaveBeenCalled();
+    service.close();
+  });
+
   it("uses auth.json when the credits default hides the guardian's OpenAI account", async () => {
     const rpc = new FakeAccountRpc();
     rpc.queue("account/read", { account: null, requiresOpenaiAuth: false });
