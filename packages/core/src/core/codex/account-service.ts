@@ -172,6 +172,7 @@ export class SharedCodexAccountService implements CodexAccountService {
   }
 
   async getStatus(): Promise<AIToolStatusProbeResult> {
+    const loginStartEpoch = this.isLoginIdle() ? this.loginStartEpoch : null;
     let response: CodexAccountReadResponse;
     try {
       response = await this.manager.request<CodexAccountReadResponse>(Method.accountRead, {
@@ -198,6 +199,23 @@ export class SharedCodexAccountService implements CodexAccountService {
     // A custom default provider has no OpenAI account of its own. Preserve the
     // saved guardian login so the payer resolver can select it again later.
     if (!account && !response.requiresOpenaiAuth) return statusFromFile(fileStatus);
+    if (
+      !account &&
+      fileStatus.authMode === "chatgpt" &&
+      fileStatus.loggedIn &&
+      // A login that starts after account/read can write new tokens before
+      // markAuthRevoked reads auth.json, which would fingerprint the new token.
+      loginStartEpoch === this.loginStartEpoch &&
+      this.isLoginIdle()
+    ) {
+      // This account/read asked Codex to refresh the login. As of Codex 0.160
+      // it hides the account of a saved ChatGPT login only once a refresh of
+      // that login failed permanently, and it never records a transient
+      // failure. Marking the login keeps the credits branch above, which
+      // cannot see the account, from reading it as signed in.
+      await this.markAuthRevoked();
+      return statusFromFile(await this.readFileStatus());
+    }
     if (!account) return { loggedIn: false, authMode: fileStatus.authMode ?? null };
     if (account.type === "apiKey") {
       return { loggedIn: true, authMode: "apikey", accountType: "api_key" };
@@ -225,6 +243,10 @@ export class SharedCodexAccountService implements CodexAccountService {
       accountType: typeof account.type === "string" ? account.type : fileStatus.accountType,
       email: fileStatus.email,
     };
+  }
+
+  private isLoginIdle(): boolean {
+    return !this.activeLogin && !this.loginStartPending;
   }
 
   async getUsage(): Promise<AIToolUsageStatus | null> {
