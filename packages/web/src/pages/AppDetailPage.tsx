@@ -403,7 +403,7 @@ export default function AppDetailPage() {
                       {item.loadError ?? item.description}
                     </p>
                   </ListRowContent>
-                  {key === "agents" ? (
+                  {key === "agents" && !item.loadError ? (
                     <IconButton
                       size="sm"
                       label={t("installed.chatWithAgentAria", { agent: item.name })}

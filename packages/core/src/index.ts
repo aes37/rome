@@ -407,7 +407,7 @@ async function main() {
   const appStore = createAppStoreService({ appCatalog });
 
   // Subscribers ordered agentLoader → actionLoader → skillCatalog →
-  // actionRegistry → channelHook → runtimeStatus.
+  // artifactLoadFailures → actionRegistry → channelHook → runtimeStatus.
   const artifactIdentity = {
     legacyBindings: parseLegacyArtifactBindings(
       await settingsRepo.get(ARTIFACT_LEGACY_BINDINGS_SETTING),
