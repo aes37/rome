@@ -57,12 +57,13 @@ describe("facade tool input schemas", () => {
 
   it.each(
     allBuiltInTools().map((t) => [t.name, t] as const),
-  )("%s survives the zod round trip without the flat fallback", (_name, tool) => {
-    expect(() =>
-      z.toJSONSchema(
-        z.object(jsonSchemaObjectToZodRawShape(tool.inputSchema as JSONSchema.Schema)),
-      ),
-    ).not.toThrow();
+  )("%s survives the zod round trip without the flat fallback", (name, tool) => {
+    // Without the fallback, toMcpToolShape advertises exactly the full conversion.
+    const full = z.toJSONSchema(
+      z.object(jsonSchemaObjectToZodRawShape(tool.inputSchema as JSONSchema.Schema)),
+    );
+    const advertised = z.toJSONSchema(z.object(toMcpToolShape(name, tool.inputSchema)));
+    expect(advertised).toEqual(full);
   });
 
   it("advertises propose_routine's filter conditions with their item shape", () => {
