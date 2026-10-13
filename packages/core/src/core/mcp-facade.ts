@@ -787,8 +787,9 @@ async function activateRoutineDraft(
     return fallback("you are not permitted to create routines directly");
   }
 
-  // create_routine runs the same args check. Running it here first rejects a
-  // draft whose args fail on every fire before create_routine is called.
+  // create_routine runs the same args check. This copy runs in-process against
+  // the session's registry, so a draft with bad args is rejected without
+  // starting a create_routine execution that would only record a failure.
   const argsError = deps.validateArgs(draft.actionName, draft.args);
   if (argsError) {
     return text(
