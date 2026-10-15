@@ -6,8 +6,14 @@ import type {
   TurnMiddlewareNext,
 } from "@rome-os/app-runtime";
 import { createProgressRepository } from "../../db/repositories/progress.js";
-import { runTurn, type TurnReply, type WelcomeEffects } from "./script.js";
-import { emitComponent, emitAskQuestion, emitConnectAi } from "./component.js";
+import {
+  finishAfterBuild,
+  isOnboardingBuildTurn,
+  runTurn,
+  type TurnReply,
+  type WelcomeEffects,
+} from "./script.js";
+import { emitComponent, emitAskQuestion, emitConnectAi, emitHandoff } from "./component.js";
 import type { SummonResult } from "./script.js";
 import { copyFor } from "./copy.js";
 import { normalizeWelcomeLocale, type WelcomeLocale } from "../../locale.js";
@@ -56,7 +62,8 @@ async function typeOut(
  * `welcome-to-rome` session and produces the reply from a deterministic state
  * machine — the model is never called. The heavy steps (memory, ideas) are
  * delegated to specialist agents via an inline `summon`. Every other session
- * passes straight through to the model via `next()`.
+ * passes straight through to the model via `next()`, and the onboarding build
+ * turn gets the welcome's closing message posted after it.
  */
 class WelcomeTurnMiddleware implements TurnMiddlewareHook {
   // Ordering is irrelevant while this is the only middleware, but the seam
@@ -70,7 +77,9 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
 
   async handle(ctx: TurnMiddlewareContext, next: TurnMiddlewareNext): Promise<void> {
     if (ctx.session.agentName !== `${this.deps.appId}:${AGENT_NAME}`) {
+      const isBuild = await this.isBuildTurn(ctx);
       await next();
+      if (isBuild) await this.postClosingMessage(ctx);
       return;
     }
 
@@ -96,6 +105,8 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
    *    components (name-card / scout-suggestions / idea-picker).
    *  - `ask`: an optional lead-in + the host's built-in ask_question card.
    *  - `connect_ai`: an optional lead-in + the host's built-in AI tools card.
+   *  - `handoff`: an optional lead-in, then the floor passes to another agent in
+   *    this same chat.
    *  A parked turn emits NO terminal `result` — the card's result arrives as
    *  the next turn. */
   private async emitReply(ctx: TurnMiddlewareContext, reply: TurnReply): Promise<void> {
@@ -112,8 +123,57 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
       emitAskQuestion(emit, reply.questions);
     } else if (reply.kind === "connect_ai") {
       emitConnectAi(emit);
+    } else if (reply.kind === "handoff") {
+      const { agentName, agentLabel, brief } = reply;
+      emitHandoff(emit, { agentName, agentLabel, brief });
     } else {
       emitComponent(emit, reply.componentId, reply.props);
+    }
+  }
+
+  /** Whether this turn is the build of the guardian's first app. A failed
+   *  check reads as no, so ordinary chat never depends on the welcome's state. */
+  private async isBuildTurn(ctx: TurnMiddlewareContext): Promise<boolean> {
+    const db = this.deps.appContext?.db;
+    if (!db) return false;
+    try {
+      return isOnboardingBuildTurn(createProgressRepository(db).get(), await this.getLocale(), {
+        agentName: ctx.session.agentName,
+        prompt: ctx.input.prompt ?? "",
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /** Post the welcome's closing message as its own message after the build
+   *  turn. A turn's stream ends with its reply, so the message goes through
+   *  the chat's channel instead. */
+  private async postClosingMessage(ctx: TurnMiddlewareContext): Promise<void> {
+    const appContext = this.deps.appContext;
+    if (!appContext?.db) return;
+    const threadId = ctx.session.channelThreadKey.replace(/^webchat:/, "");
+    try {
+      const text = finishAfterBuild(
+        createProgressRepository(appContext.db),
+        await this.getLocale(),
+      );
+      const outcome = await appContext.runAction("send_message", {
+        channel: "webchat",
+        threadId,
+        text,
+      });
+      if (outcome.status !== "ok") {
+        this.deps.logger.warn("welcome-to-rome could not post the closing message", {
+          sessionId: ctx.session.id,
+          status: outcome.status,
+        });
+      }
+    } catch (err) {
+      this.deps.logger.warn("welcome-to-rome could not post the closing message", {
+        sessionId: ctx.session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

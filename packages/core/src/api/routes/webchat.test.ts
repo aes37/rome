@@ -264,6 +264,35 @@ describe("Webchat API", () => {
     ]);
   });
 
+  it("marks an agent that presents as the main agent, and only that one", async () => {
+    const record = (name: string, presentAsMain?: boolean) => [
+      `welcome:${name}`,
+      {
+        config: { name, description: name, ...(presentAsMain ? { presentAsMain } : {}) },
+        metadata: {
+          kind: "agent",
+          ownerType: "app",
+          ownerId: "welcome",
+          publicName: name,
+          aliases: [],
+          sourcePath: `/installed/welcome/agents/${name}.yaml`,
+        },
+      },
+    ];
+    deps.agentLoader = {
+      getAllRecords: () => new Map([record("guide", true), record("helper")] as never),
+    } as unknown as typeof deps.agentLoader;
+    deps.appCatalog = { listResolved: () => [] } as unknown as typeof deps.appCatalog;
+
+    const res = await createWebchatRuntime(deps).routes.request("/chat/agents");
+    const [group] = (await res.json()) as Array<{ agents: Array<Record<string, unknown>> }>;
+
+    expect(group.agents).toEqual([
+      { name: "welcome:guide", localName: "guide", description: "guide", presentAsMain: true },
+      { name: "welcome:helper", localName: "helper", description: "helper" },
+    ]);
+  });
+
   it("aggregates completed child trace summaries without duplicating them in storage", async () => {
     const parentSessionId = "parent-summary-session";
     const parentTurnId = "parent-summary-turn";

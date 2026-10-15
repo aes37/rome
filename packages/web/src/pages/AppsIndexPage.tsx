@@ -1,4 +1,4 @@
-import { Download, Ellipsis, Pin, Plus, Search, Store, X } from "lucide-react";
+import { Download, Ellipsis, Plus, Search, Store, X } from "lucide-react";
 import { Spinner } from "@rome-os/ui/spinner";
 import { useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -43,7 +43,14 @@ import { useAppsList, useInvalidateApps } from "@/hooks/use-apps";
 import { useAppLifecycle } from "@/hooks/use-app-lifecycle";
 import { useLongPressMenu } from "@/hooks/use-long-press-menu";
 import { useSidebarPins } from "@/hooks/use-sidebar-pins";
-import { APP_NAV } from "@/shell/AppGrid";
+
+// First-party apps with nothing for the guardian to open from the launcher: the
+// assistant has no page, and browser automation's page is the agent's tooling.
+const UNLISTED_BUILTIN_APP_IDS: ReadonlySet<string> = new Set(["assistant", "browser-automation"]);
+
+function isUnlistedBuiltin(app: InstalledAppCard): boolean {
+  return app.origin === "builtin" && UNLISTED_BUILTIN_APP_IDS.has(app.id);
+}
 
 function isInFlight(phase: AppViewState): boolean {
   return phase === "installing" || phase === "uninstalling";
@@ -283,16 +290,14 @@ function SectionHeader({ title, count }: SectionHeaderProps) {
 
 export default function AppsIndexPage() {
   const { t } = useTranslation("apps");
-  const { t: tCommon } = useTranslation("common");
   const navigate = useNavigate();
   const { apps, error: appsError } = useAppsList();
   const invalidateApps = useInvalidateApps();
   const lifecycle = useAppLifecycle(apps);
   const loadError = appsError ? appsError.message || t("installed.errors.loadFailed") : null;
-  // Live filter across the apps grid (built-in surfaces + installed apps).
-  // Matching is substring, case-insensitive, over each card's user-facing name,
-  // its id, and (for built-ins) its description — the same things a user reads
-  // on the card. Empty query means "show everything".
+  // Live filter across the installed apps. Matching is substring,
+  // case-insensitive, over each card's user-facing name and its id — the same
+  // things a user reads on the card. Empty query means "show everything".
   const [query, setQuery] = useState("");
   const [storeOpen, setStoreOpen] = useState(false);
   const [remixTarget, setRemixTarget] = useState<InstalledAppCard | null>(null);
@@ -307,68 +312,30 @@ export default function AppsIndexPage() {
   const closeRemixDialog = () => {
     setRemixTarget(null);
   };
-  const builtinPages = APP_NAV.filter((b) => b.id !== "apps" && b.id !== "chat");
+  // First-party apps the launcher leaves out: they still install and run, but
+  // the guardian has nothing to open in them from here.
+  const listedApps = apps?.filter((app) => !isUnlistedBuiltin(app)) ?? null;
 
   const normalizedQuery = query.trim().toLowerCase();
   const isSearching = normalizedQuery.length > 0;
-  const matchesBuiltin = (entry: (typeof APP_NAV)[number]): boolean => {
-    if (!isSearching) return true;
-    const haystack = [
-      tCommon(entry.labelKey),
-      t(`builtinDescriptions.${entry.id}`, { defaultValue: "" }),
-      entry.id,
-    ]
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(normalizedQuery);
-  };
   const matchesApp = (app: InstalledAppCard): boolean => {
     if (!isSearching) return true;
     return `${app.displayName} ${app.id}`.toLowerCase().includes(normalizedQuery);
   };
-  const visibleBuiltins = builtinPages.filter(matchesBuiltin);
   // `null` while the installed list is still loading — kept distinct from the
   // empty array so the skeleton (loading) and the empty state (no matches) don't
   // collide. Filtering applies live once the list lands.
-  const visibleApps = apps === null ? null : apps.filter(matchesApp);
+  const visibleApps = listedApps === null ? null : listedApps.filter(matchesApp);
   // The grid is sectioned by the server-derived provenance (`AppOrigin`):
-  // apps built on this instance, App Store installs, and the built-in group,
-  // which pairs first-party apps with Rome's own surfaces (APP_NAV).
+  // apps built on this instance, App Store installs, and the first-party apps
+  // shipped with Rome. Rome's own pages live in the sidebar, not here.
   const visibleMyApps = visibleApps?.filter((app) => app.origin === "local") ?? [];
   const visibleStoreApps = visibleApps?.filter((app) => app.origin === "appstore") ?? [];
   const visibleBuiltinApps = visibleApps?.filter((app) => app.origin === "builtin") ?? [];
-  const resultCount = visibleBuiltins.length + (visibleApps?.length ?? 0);
+  const resultCount = visibleApps?.length ?? 0;
   // Only an empty *after the list has loaded* counts as "no matches"; a pending
   // load keeps showing skeletons even when a query is active.
   const noMatches = isSearching && visibleApps !== null && resultCount === 0;
-
-  const renderBuiltinTile = (entry: (typeof APP_NAV)[number]) => {
-    const label = tCommon(entry.labelKey);
-    const pinned = isPinned("builtin", entry.id);
-    return (
-      <AppTile
-        key={`builtin:${entry.id}`}
-        ariaLabel={label}
-        clickTarget={
-          entry.id === "store"
-            ? { type: "action", onClick: () => setStoreOpen(true) }
-            : { type: "link", href: entry.href }
-        }
-        menuLabel={t("installed.moreActionsAria", { name: label })}
-        menu={
-          <DropdownMenuItem
-            onClick={() => togglePin("builtin", entry.id)}
-            className="text-foreground"
-          >
-            <Pin className="h-3.5 w-3.5 text-subtle-foreground" aria-hidden />
-            {pinned ? t("installed.unpin") : t("installed.pin")}
-          </DropdownMenuItem>
-        }
-        icon={<TileIcon size="lg" kind="builtin" displayName={label} BuiltinIcon={entry.Icon} />}
-        name={label}
-      />
-    );
-  };
 
   const renderInstalledMenuItems = (app: InstalledAppCard) => (
     <AppActionDropdownItems
@@ -448,8 +415,7 @@ export default function AppsIndexPage() {
   // during load every section stays mounted so the skeletons have a home.
   const showMySection = apps === null || !isSearching || visibleMyApps.length > 0;
   const showStoreSection = apps === null || !isSearching || visibleStoreApps.length > 0;
-  const showBuiltinSection =
-    apps === null || !isSearching || visibleBuiltins.length + visibleBuiltinApps.length > 0;
+  const showBuiltinSection = apps === null || !isSearching || visibleBuiltinApps.length > 0;
 
   // The "New app" ghost tile hands off to the chat composer with a seeded
   // draft — app creation is an agent task (app_management create), not a
@@ -472,25 +438,10 @@ export default function AppsIndexPage() {
       </div>
     ));
 
-  const myAppsCount =
-    apps === null
-      ? null
-      : isSearching
-        ? visibleMyApps.length
-        : apps.filter((app) => app.origin === "local").length;
-  const storeAppsCount =
-    apps === null
-      ? null
-      : isSearching
-        ? visibleStoreApps.length
-        : apps.filter((app) => app.origin === "appstore").length;
-  // Built-in = Rome's own surfaces plus the first-party apps shipped with it.
-  const builtinCount =
-    apps === null
-      ? null
-      : isSearching
-        ? visibleBuiltins.length + visibleBuiltinApps.length
-        : builtinPages.length + apps.filter((app) => app.origin === "builtin").length;
+  // Every count reads the visible list: unsearched, that is the whole listing.
+  const myAppsCount = listedApps === null ? null : visibleMyApps.length;
+  const storeAppsCount = listedApps === null ? null : visibleStoreApps.length;
+  const builtinCount = listedApps === null ? null : visibleBuiltinApps.length;
   const updatesCount = lifecycle.upgradeTargets.length;
 
   return (
@@ -521,7 +472,14 @@ export default function AppsIndexPage() {
                 ? t("installed.updateAllUpdating")
                 : t("installed.updateAll")}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setStoreOpen(true)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setStoreOpen(true)}
+              className="font-medium"
+            >
+              <Store data-icon="inline-start" className="h-3.5 w-3.5" aria-hidden />
               {t("header.appStore")}
             </Button>
           </PageActions>
@@ -641,10 +599,13 @@ export default function AppsIndexPage() {
             {showBuiltinSection ? (
               <Section aria-label={t("sections.builtin.title")}>
                 <SectionHeader title={t("sections.builtin.title")} count={builtinCount} />
-                <div className={tileGridClass}>
-                  {visibleBuiltins.map((entry) => renderBuiltinTile(entry))}
-                  {visibleBuiltinApps.map((app) => renderInstalledTile(app))}
-                </div>
+                {apps === null ? (
+                  <div className={tileGridClass}>{renderSkeletonTiles("builtin", 4)}</div>
+                ) : (
+                  <div className={tileGridClass}>
+                    {visibleBuiltinApps.map((app) => renderInstalledTile(app))}
+                  </div>
+                )}
               </Section>
             ) : null}
           </div>

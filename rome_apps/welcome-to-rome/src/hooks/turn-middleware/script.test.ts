@@ -1,5 +1,5 @@
 import { describe, expect, it, rs } from "@rstest/core";
-import { runTurn, type WelcomeEffects } from "./script.js";
+import { finishAfterBuild, isOnboardingBuildTurn, runTurn, type WelcomeEffects } from "./script.js";
 import type { ProgressRepository, WelcomeProgress } from "../../db/repositories/progress.js";
 
 // Drive the state machine with an in-memory progress row and spies for the
@@ -155,6 +155,10 @@ describe("runTurn — connect an AI", () => {
     }
     expect(getRow().node).toBe("await_question");
     expect(getRow().aiConnected).toBe(true);
+    // What Rome can do is said before the question, ending on a full stop.
+    expect(fx.say).toHaveBeenCalledOnce();
+    const said = rs.mocked(fx.say).mock.calls[0]?.[0] ?? "";
+    expect(said).toMatch(/^Here's what I can do\..*\.$/);
   });
 
   it("returns to the connect step after a page exit (typed text re-shows the card)", async () => {
@@ -219,9 +223,11 @@ describe("runTurn — the one question", () => {
       "welcome-memory",
       expect.stringContaining("Twelve tabs open, none of them read"),
     );
-    // A research basis offers scouts before the brainstorm.
-    expect(reply).toMatchObject({ componentId: "scout-suggestions" });
-    expect(getNode()).toBe("await_scouts");
+    // Straight from the answer to the brainstorm, with no briefing step between.
+    expect(fx.summon).toHaveBeenCalledWith("welcome-app-ideas", expect.any(String));
+    expect(fx.say).toHaveBeenCalledWith("Got it. Brainstorming a few first apps for you…");
+    expect(reply).toMatchObject({ componentId: "idea-picker" });
+    expect(getNode()).toBe("await_idea");
   });
 
   it("uses the Chinese question when the guardian selected Chinese", async () => {
@@ -232,7 +238,7 @@ describe("runTurn — the one question", () => {
 
     expect(reply.kind).toBe("ask");
     if (reply.kind === "ask") {
-      expect(reply.lead).toBe("只问一个问题，然后我们就开始做点东西：");
+      expect(reply.lead).toBe("先跟我说说你自己，然后我们一起做点东西。");
       expect(reply.questions[0]).toMatchObject({ question: "下面哪个最像你的一周？" });
     }
   });
@@ -245,11 +251,13 @@ describe("runTurn — the one question", () => {
     expect(fx.summon).not.toHaveBeenCalled();
     expect(reply).toMatchObject({ kind: "ask" });
     expect(getNode()).toBe("await_question");
+    // The capabilities line is said once, on the way in, not with each re-show.
+    expect(fx.say).not.toHaveBeenCalled();
   });
 });
 
-describe("runTurn — scouts and the brainstorm", () => {
-  it("continues to the first-app idea picker after the scout card resolves", async () => {
+describe("runTurn — a conversation parked on the removed scout step", () => {
+  it("carries on to the first-app idea picker", async () => {
     const { fx, getNode } = makeEffects("await_scouts", {
       aiConnected: true,
       introSummary: "Interests: design and product strategy.",
@@ -267,8 +275,18 @@ describe("runTurn — scouts and the brainstorm", () => {
   });
 });
 
+describe("withEndPunctuation", () => {
+  it("adds a full stop only when a message stops short", async () => {
+    const { withEndPunctuation } = await import("./copy.js");
+    expect(withEndPunctuation("You work in design", "en")).toBe("You work in design.");
+    expect(withEndPunctuation("You work in design!", "en")).toBe("You work in design!");
+    expect(withEndPunctuation("你从事设计", "zh-CN")).toBe("你从事设计。");
+    expect(withEndPunctuation("你从事设计。", "zh-CN")).toBe("你从事设计。");
+  });
+});
+
 describe("runTurn — done", () => {
-  it("ends with the chosen kickoff prompt's idea named, for the fresh chat the picker opened", async () => {
+  it("hands the picked idea to the guardian's agent in this chat", async () => {
     const { fx, getRow } = makeEffects("await_idea", {
       ideas: [{ title: "Launch tracker", prompt: "Build me a launch tracker." }],
     });
@@ -276,9 +294,54 @@ describe("runTurn — done", () => {
     const reply = await runTurn(resolution({ ideaTitle: "Launch tracker" }), fx);
 
     expect(reply).toMatchObject({
-      kind: "text",
-      text: expect.stringContaining('Let\'s build "Launch tracker"'),
+      kind: "handoff",
+      lead: 'Let\'s build "Launch tracker".',
+      agentName: "core:main",
+      agentLabel: "Rome",
     });
+    // The brief is the idea's prompt alone. The welcome posts its own closing
+    // message after the build.
+    if (reply.kind !== "handoff") return;
+    expect(reply.brief).toBe("Build me a launch tracker.");
+    // Not finished yet: the welcome closes after the build turn.
+    expect(getRow().node).toBe("building");
+    expect(getRow().completedAt).toBeNull();
+  });
+
+  it("finishes the welcome when the build handoff closes before the build turn ends", async () => {
+    const { fx, getRow } = makeEffects("building");
+
+    const reply = await runTurn(DISMISSED, fx);
+
+    expect(reply).toMatchObject({ kind: "text", text: expect.stringContaining("all set") });
+    if (reply.kind === "text") expect(reply.text).toContain("App Store");
+    expect(getRow().node).toBe("done");
+    expect(getRow().completedAt).toEqual(expect.any(String));
+  });
+
+  it("recognizes the build turn by the picked idea's prompt while the build is pending", () => {
+    const ideas = [{ title: "Launch tracker", prompt: "Build me a launch tracker." }];
+    const { getRow } = makeEffects("building", { ideas });
+    const turn = { agentName: "core:main", prompt: "Build me a launch tracker." };
+
+    expect(isOnboardingBuildTurn(getRow(), "en", turn)).toBe(true);
+    // Another agent, another prompt, or a finished welcome is ordinary chat.
+    expect(isOnboardingBuildTurn(getRow(), "en", { ...turn, agentName: "notes:writer" })).toBe(
+      false,
+    );
+    expect(isOnboardingBuildTurn(getRow(), "en", { ...turn, prompt: "Add a dark mode." })).toBe(
+      false,
+    );
+    expect(isOnboardingBuildTurn({ ...getRow(), node: "done" }, "en", turn)).toBe(false);
+  });
+
+  it("ends the welcome after the build with the explore message", () => {
+    const { fx, getRow } = makeEffects("building");
+
+    const text = finishAfterBuild(fx.progress, "en");
+
+    expect(text).toContain("all set");
+    expect(text).toContain("App Store");
     expect(getRow().node).toBe("done");
     expect(getRow().completedAt).toEqual(expect.any(String));
   });
@@ -288,13 +351,13 @@ describe("runTurn — done", () => {
     rs.mocked(fx.getLocale).mockResolvedValue("zh-CN");
 
     const reply = await runTurn(resolution({ ideaTitle: "培养习惯" }), fx);
-    expect(reply).toMatchObject({ kind: "text", text: expect.stringContaining("「培养习惯」") });
+    expect(reply).toMatchObject({ kind: "handoff", lead: expect.stringContaining("「培养习惯」") });
 
     const { fx: englishFx } = makeEffects("await_idea");
     const englishReply = await runTurn(resolution({ ideaTitle: "Habit garden" }), englishFx);
     expect(englishReply).toMatchObject({
-      kind: "text",
-      text: expect.stringContaining('Let\'s build "Habit garden"'),
+      kind: "handoff",
+      lead: expect.stringContaining('Let\'s build "Habit garden"'),
     });
   });
 

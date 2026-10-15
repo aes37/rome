@@ -29,34 +29,14 @@ rs.mock("@/components/logo", () => ({
   ),
 }));
 
-// The built-in nav grid imports .svg icons that resolve to URL strings under
-// Rstest (not React components), which jsdom rejects as element names. The
-// real icons are irrelevant to apps reactivity, so stub them with components.
+// The pin hook reads its storage contract from the sidebar module, whose nav
+// imports .svg icons that resolve to URL strings under Rstest (not React
+// components). Stub the module down to the contract the hook uses.
 rs.mock("@/shell/AppGrid", () => ({
-  APP_NAV: [
-    { id: "apps", href: "/apps", labelKey: "nav.apps", Icon: () => null },
-    { id: "chat", href: "/chat", labelKey: "nav.chat", Icon: () => null },
-    { id: "projects", href: "/projects", labelKey: "nav.projects", Icon: () => null },
-  ],
-  DEFAULT_SIDEBAR_PINS: [
-    { type: "builtin" as const, id: "apps" },
-    { type: "builtin" as const, id: "chat" },
-    { type: "builtin" as const, id: "projects" },
-  ],
+  DEFAULT_SIDEBAR_PINS: [],
   STORAGE_KEY: "rome-sidebar-pins",
-  normalizeSidebarPins: (
-    pins: Array<{ type: "builtin" | "app"; id: string }>,
-  ): Array<{ type: "builtin" | "app"; id: string }> => {
-    const required = [
-      { type: "builtin" as const, id: "apps" },
-      { type: "builtin" as const, id: "chat" },
-    ];
-    const requiredIds = new Set(required.map((pin) => pin.id));
-    return [
-      ...required,
-      ...pins.filter((pin) => !(pin.type === "builtin" && requiredIds.has(pin.id))),
-    ];
-  },
+  normalizeSidebarPins: (pins: Array<{ type: string; id: string }>) =>
+    pins.filter((pin) => pin.type === "app"),
 }));
 
 // These are the page's reactivity contracts, not its internals: after a
@@ -390,15 +370,29 @@ describe("AppsIndexPage reactivity", () => {
     });
   });
 
-  it("omits the built-in chat card from the apps catalog", async () => {
+  it("lists no Rome pages, and leaves out the first-party apps with nothing to open", async () => {
     mockBackend({
-      installed: [],
+      installed: [
+        installedCard({ id: "skills", displayName: "Skills", origin: "builtin" }),
+        installedCard({ id: "assistant", displayName: "Assistant", origin: "builtin" }),
+        installedCard({
+          id: "browser-automation",
+          displayName: "Browser Automation",
+          origin: "builtin",
+        }),
+      ],
     });
 
     renderPage();
 
-    expect(await screen.findByText("Projects")).toBeTruthy();
+    const builtinSection = await screen.findByRole("region", { name: "Built-in apps" });
+    expect(await within(builtinSection).findByText("Skills")).toBeTruthy();
+    expect(within(builtinSection).getByText("1")).toBeTruthy();
+    // Rome's own pages live in the sidebar.
+    expect(screen.queryByText("Settings")).toBeNull();
     expect(screen.queryByText("Chat")).toBeNull();
+    expect(screen.queryByText("Assistant")).toBeNull();
+    expect(screen.queryByText("Browser Automation")).toBeNull();
   });
 
   it("sections apps by origin: my apps, then App Store installs, then built-ins", async () => {
@@ -438,8 +432,6 @@ describe("AppsIndexPage reactivity", () => {
     expect(within(mySection).getByText("Built Here")).toBeTruthy();
     expect(within(storeSection).getByText("Store App")).toBeTruthy();
     expect(within(builtinSection).getByText("Shipped App")).toBeTruthy();
-    // …and built-in surfaces share the built-in section with first-party apps.
-    expect(within(builtinSection).getByText("Projects")).toBeTruthy();
 
     // Section order matches the page contract: my → store → built-in.
     const builtHere = within(mySection).getByText("Built Here");
@@ -782,22 +774,6 @@ describe("AppsIndexPage tile interactions", () => {
     expect(await screen.findByRole("menu")).toBeTruthy();
     expect(screen.getByTestId("location").textContent).toContain('"pathname":"/"');
   });
-
-  it("toggles a built-in surface's sidebar pin from its tile menu", async () => {
-    // Projects starts pinned (it's in DEFAULT_SIDEBAR_PINS), so the menu
-    // offers Unpin; activating it drops the entry from the stored pins.
-    const user = userEvent.setup();
-    mockBackend({ installed: [] });
-
-    renderPage();
-
-    await user.click(await screen.findByLabelText("More actions for Projects"));
-    await user.click(await screen.findByRole("menuitem", { name: "Unpin from sidebar" }));
-
-    const stored = JSON.parse(localStorage.getItem("rome-sidebar-pins") ?? "[]");
-    expect(stored).not.toContainEqual({ type: "builtin", id: "projects" });
-    expect(stored).toContainEqual({ type: "builtin", id: "apps" });
-  });
 });
 
 describe("AppsIndexPage tile name tooltip", () => {
@@ -885,12 +861,13 @@ describe("AppsIndexPage search", () => {
     expect(toolbar.contains(screen.getByLabelText("Search apps"))).toBe(true);
   });
 
-  it("filters the grid to the apps and built-ins matching the query", async () => {
+  it("filters the grid to the apps matching the query", async () => {
     const user = userEvent.setup();
     mockBackend({
       installed: [
         installedCard({ id: "weather", displayName: "Weather" }),
         installedCard({ id: "calendar", displayName: "Calendar" }),
+        installedCard({ id: "skills", displayName: "Skills", origin: "builtin" }),
       ],
     });
 
@@ -898,14 +875,15 @@ describe("AppsIndexPage search", () => {
 
     expect(await screen.findByText("Weather")).toBeTruthy();
     expect(screen.getByText("Calendar")).toBeTruthy();
-    expect(screen.getByText("Projects")).toBeTruthy();
+    expect(screen.getByText("Skills")).toBeTruthy();
 
     await user.type(screen.getByLabelText("Search apps"), "weath");
 
     expect(screen.getByText("Weather")).toBeTruthy();
-    // Non-matching installed app and built-in surface both drop out.
+    // Non-matching apps drop out, and so does the section left without one.
     expect(screen.queryByText("Calendar")).toBeNull();
-    expect(screen.queryByText("Projects")).toBeNull();
+    expect(screen.queryByText("Skills")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Built-in apps" })).toBeNull();
   });
 
   it("derives the displayed section count from visible search results", async () => {
@@ -992,11 +970,12 @@ describe("AppsIndexPage ghost tiles", () => {
     const mySection = screen.getByRole("region", { name: "My apps" });
     const storeSection = screen.getByRole("region", { name: "Installed apps" });
     expect(within(storeSection).getByRole("button", { name: "Browse store" })).toBeTruthy();
-    // A zero count renders no pill; the non-empty built-in section keeps its.
-    expect(within(mySection).queryByText("0")).toBeNull();
-    expect(within(storeSection).queryByText("0")).toBeNull();
+    // A zero count renders no pill. The built-in section stays, empty, even
+    // though it has no ghost tile to offer.
     const builtinSection = screen.getByRole("region", { name: "Built-in apps" });
-    expect(within(builtinSection).getByText("1")).toBeTruthy();
+    for (const section of [mySection, storeSection, builtinSection]) {
+      expect(within(section).queryByText("0")).toBeNull();
+    }
   });
 
   it("seeds a chat draft from the New app ghost tile", async () => {

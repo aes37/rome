@@ -1,6 +1,6 @@
 import type { ChatMessage, TranscriptPart } from "@/lib/chat-types";
 import { orderChatMessages } from "@/lib/chat-message-ordering";
-import { prettyAgentName } from "@/lib/agent-name";
+import { isMainAgentName, prettyAgentName } from "@/lib/agent-name";
 import { parseEntries, parseMessageEntries } from "@/components/chat/entries/parse-entries";
 
 // Pure derivation: many flat per-session message lists → one renderable view.
@@ -239,10 +239,14 @@ export function buildChatView(
     arr.push(h);
     handoffsByParent.set(h.parentSessionId, arr);
     if (h.summary) seedByChild.set(h.childSessionId, h.summary);
-    identityBySession.set(h.childSessionId, {
-      name: h.agentLabel,
-      iconUrl: `/api/apps/${encodeURIComponent(h.appId)}/icon`,
-    });
+    // A handoff to the main agent (onboarding's first-app build) is the
+    // guardian's own agent carrying on, so it speaks with the main identity.
+    identityBySession.set(
+      h.childSessionId,
+      isMainAgentName(h.agentName)
+        ? mainIdentity
+        : { name: h.agentLabel, iconUrl: `/api/apps/${encodeURIComponent(h.appId)}/icon` },
+    );
   }
 
   const floorSessionId = findFloorSession(mainSessionId, handoffsByParent);

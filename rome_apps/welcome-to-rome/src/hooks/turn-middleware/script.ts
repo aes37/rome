@@ -3,7 +3,7 @@
 // (a text block, one of the app's own inline components, or a host card),
 // advances the node, and returns it. The path is:
 //
-//   greet → await_names → await_ai → await_question → (await_scouts) → await_idea → done
+//   greet → await_names → await_ai → await_question → await_idea → (building) → done
 //
 // The script spends no tokens of its own, so it runs before any AI provider is
 // connected. Two steps summon real agents: the memory fold after the question
@@ -13,15 +13,21 @@
 // into events; this file owns *what to show / ask, and when*.
 
 import { copyFor, type WelcomeCopy } from "./copy.js";
-import type { AppIdea, ProgressRepository } from "../../db/repositories/progress.js";
+import type {
+  AppIdea,
+  ProgressRepository,
+  WelcomeProgress,
+} from "../../db/repositories/progress.js";
 import { encodeIdeas } from "../../db/repositories/progress.js";
 import { genericIdeas, introQuestionFor } from "../../i18n/locales/index.js";
 import { guardianLanguageInstruction, type WelcomeLocale } from "../../locale.js";
 import { isDismissedInteraction, readResolutionJson } from "./resolution.js";
 import type { AskQuestion } from "./component.js";
-import { scoutSuggestionsFromBasis, type ScoutSuggestion } from "./scout-suggestions.js";
 
 const MEMORY_AGENT = "welcome-memory";
+/** Builds the picked first app. The guardian's own agent, so the build reads
+ *  as the same conversation carrying on. */
+const BUILDER_AGENT = "core:main";
 const IDEAS_AGENT = "welcome-app-ideas";
 
 /** Idea-picker opt-out sentinel (must match src/web/idea-picker.tsx). */
@@ -35,7 +41,10 @@ export type TurnReply =
   // The host's built-in ask_question card; its answers return as the next turn.
   | { kind: "ask"; lead?: string; questions: AskQuestion[] }
   // The host's built-in connect-AI card; `{ connected }` or `{ skip }` returns next turn.
-  | { kind: "connect_ai"; lead?: string };
+  | { kind: "connect_ai"; lead?: string }
+  // Pass the floor to `agentName` in this chat, opening with `brief`. The
+  // handoff's end returns next turn.
+  | { kind: "handoff"; lead?: string; agentName: string; agentLabel: string; brief: string };
 
 /** Result of summoning a specialist agent inline (blocking). */
 export interface SummonResult {
@@ -166,15 +175,6 @@ function ideaPicker(ideas: AppIdea[]): TurnReply {
   return { kind: "component", componentId: "idea-picker", props: { ideas } };
 }
 
-function scoutSuggestions(scouts: ScoutSuggestion[], language: WelcomeLanguage): TurnReply {
-  return {
-    kind: "component",
-    lead: language.copy.scoutsLead,
-    componentId: "scout-suggestions",
-    props: { scouts },
-  };
-}
-
 const FRESH_PROGRESS = {
   introRawInput: null,
   introSummary: null,
@@ -194,6 +194,30 @@ function field(userText: string, key: string): string | null {
  * Run one user turn through the state machine. Returns what the turn should emit;
  * the caller (index.ts) turns it into events.
  */
+/**
+ * Whether a turn is the onboarding build: the builder's turn while onboarding
+ * waits on the build, with one of the offered ideas' kickoff prompts in its
+ * prompt. The handoff seeds that prompt as the build's first turn.
+ */
+export function isOnboardingBuildTurn(
+  progress: WelcomeProgress,
+  locale: WelcomeLocale,
+  turn: { agentName: string; prompt: string },
+): boolean {
+  if (turn.agentName !== BUILDER_AGENT || progress.node !== "building") return false;
+  const ideas = progress.ideas.length > 0 ? progress.ideas : genericIdeas(locale);
+  return ideas.some(
+    (idea) => idea.prompt.trim() !== "" && turn.prompt.includes(idea.prompt.trim()),
+  );
+}
+
+/** End onboarding once the build turn has finished, and return the closing
+ *  message to post after it. */
+export function finishAfterBuild(progress: ProgressRepository, locale: WelcomeLocale): string {
+  progress.patch({ node: "done", completedAt: new Date().toISOString() });
+  return copyFor(locale).finishedAfterBuild;
+}
+
 export async function runTurn(userText: string, fx: WelcomeEffects): Promise<TurnReply> {
   const p = fx.progress.get();
   const locale = await fx.getLocale();
@@ -245,6 +269,9 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
         return connectAiReply(language);
       }
       fx.progress.patch({ node: "await_question", aiConnected: res?.connected === true });
+      // Said once, on the way in: the question card itself comes back alone
+      // when the guardian types instead of answering.
+      await fx.say(language.copy.capabilities);
       return introQuestion(language);
     }
 
@@ -268,17 +295,35 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
     }
 
     case "await_scouts": {
+      // A conversation parked on the briefing-scout card from before that step
+      // was removed. Whatever the card returned, carry on to the brainstorm.
       return brainstormAppIdeas(fx, now, language);
     }
 
     case "await_idea": {
       const ideas = p.ideas.length > 0 ? p.ideas : genericIdeas(language.locale);
       const idea = resolveChosenIdea(userText, ideas, language.locale);
-      fx.progress.patch({ node: "done", completedAt: now() });
+      if (!idea) {
+        fx.progress.patch({ node: "done", completedAt: now() });
+        return { kind: "text", text: language.copy.finishedNoPick };
+      }
+      // The build carries on in this chat: the guardian's agent takes the floor
+      // with the idea's kickoff prompt as its brief.
+      fx.progress.patch({ node: "building" });
       return {
-        kind: "text",
-        text: idea ? language.copy.pickedIdea(idea) : language.copy.finishedNoPick,
+        kind: "handoff",
+        lead: language.copy.pickedIdea(idea),
+        agentName: BUILDER_AGENT,
+        agentLabel: await fx.getAgentName(),
+        brief: idea.prompt,
       };
+    }
+
+    case "building": {
+      // The guardian closed the build handoff from the composer before the
+      // build turn finished.
+      fx.progress.patch({ node: "done", completedAt: now() });
+      return { kind: "text", text: language.copy.finishedAfterBuild };
     }
 
     case "done":
@@ -333,9 +378,8 @@ async function foldMemory(
 }
 
 /** Shared tail of the question step. With an AI connected: surface the memory
- *  takeaway, then either offer briefing scouts or go straight to the first-app
- *  brainstorm. Without one, the scouts (which need a model to run) and the
- *  brainstorm are skipped for the static idea list. */
+ *  takeaway, then brainstorm first apps. Without one, the brainstorm (which
+ *  needs a model) is skipped for the static idea list. */
 async function continueAfterQuestion(
   fx: WelcomeEffects,
   now: () => string,
@@ -350,12 +394,6 @@ async function continueAfterQuestion(
   const takeaway = current.introSummary;
   if (takeaway) await fx.say(language.copy.takeaway(takeaway));
 
-  const basis = takeaway ?? current.introRawInput ?? "";
-  const scouts = scoutSuggestionsFromBasis(basis, language.locale);
-  if (scouts.length > 0) {
-    fx.progress.patch({ node: "await_scouts" });
-    return scoutSuggestions(scouts, language);
-  }
   return brainstormAppIdeas(fx, now, language);
 }
 

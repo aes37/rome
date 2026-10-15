@@ -5,6 +5,8 @@ import { artifactOwnerId } from "@/lib/artifact-name";
 import { prettyAgentName } from "@/lib/agent-name";
 import { usePresentationMode } from "@/lib/presentation-mode";
 import { useSessionsChanged } from "@/lib/session-events";
+import { projectPathForChat } from "@/hooks/use-chat-projects";
+import { DEFAULT_PROJECT_NAME } from "@/lib/chat-constants";
 
 export interface SessionIdentity {
   /** The session's display name, or null while loading / unnamed. */
@@ -18,6 +20,16 @@ export interface SessionIdentity {
   archivedAt: string | null;
   /** ISO timestamp when the session was pinned, or null when not pinned. */
   pinnedAt: string | null;
+  /** The project folder the chat works in, or null for the default one. */
+  projectPath: string | null;
+}
+
+function namedProjectPath(
+  session: { projectPath?: string | null; projectName?: string } | null,
+): string | null {
+  if (!session) return null;
+  const path = projectPathForChat(session);
+  return path === DEFAULT_PROJECT_NAME ? null : path;
 }
 
 /**
@@ -30,7 +42,8 @@ export interface SessionIdentity {
  * This hook is also the single choke point for presentation mode: while it is
  * on, the pinned-agent mention is reported as null, so every consumer (navbar,
  * per-turn identity, composer chip, mobile header) falls back to the main
- * assistant's rendering without knowing the mode exists.
+ * assistant's rendering without knowing the mode exists. An agent the catalog
+ * marks `presentAsMain` is reported the same way, always.
  */
 export function useSessionIdentity(sessionId: string | null | undefined): SessionIdentity {
   const presentationMode = usePresentationMode();
@@ -41,6 +54,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
   const [pinnedAgentMention, setPinnedAgentMention] = useState<AgentMention | null>(null);
   const [archivedAt, setArchivedAt] = useState<string | null>(null);
   const [pinnedAt, setPinnedAt] = useState<string | null>(null);
+  const [projectPath, setProjectPath] = useState<string | null>(null);
 
   useEffect(() => {
     sessionGeneration.current += 1;
@@ -51,6 +65,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
       setSessionName(null);
       setArchivedAt(null);
       setPinnedAt(null);
+      setProjectPath(null);
       return;
     }
     setModel(null);
@@ -68,6 +83,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
         setReasoningEffort(session?.reasoningEffort ?? null);
         setArchivedAt(session?.archivedAt ?? null);
         setPinnedAt(session?.pinnedAt ?? null);
+        setProjectPath(namedProjectPath(session));
         const agentName = session?.agentName ?? null;
         if (!agentName) {
           setPinnedAgentMention(null);
@@ -77,6 +93,12 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
         let appLabel = prettyAgentName(appId || agentName);
         let iconUrl: string | null = null;
         const owner = groups.find((g) => g.agents.some((a) => a.name === agentName));
+        // An agent that speaks as the main agent (onboarding) renders like an
+        // unpinned session: the main agent's chosen name and avatar.
+        if (owner?.agents.find((a) => a.name === agentName)?.presentAsMain) {
+          setPinnedAgentMention(null);
+          return;
+        }
         if (owner) {
           appId = owner.ownerId;
           appLabel = owner.label;
@@ -93,6 +115,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
           setPinnedAgentMention(null);
           setArchivedAt(null);
           setPinnedAt(null);
+          setProjectPath(null);
         }
       }
     })();
@@ -120,6 +143,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
         setReasoningEffort(session?.reasoningEffort ?? null);
         setArchivedAt(session?.archivedAt ?? null);
         setPinnedAt(session?.pinnedAt ?? null);
+        setProjectPath(namedProjectPath(session));
       } catch {
         // Best effort; the next mount / event reconciles.
       }
@@ -133,5 +157,6 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
     pinnedAgentMention: presentationMode ? null : pinnedAgentMention,
     archivedAt,
     pinnedAt,
+    projectPath,
   };
 }

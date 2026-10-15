@@ -10,9 +10,10 @@ export interface WelcomeCopy {
   /** Used when setup stored no guardian name, so the card asks for it. */
   greetNoName(agentName: string): string;
   connectAiLead: string;
+  /** What Rome can do, said once before the getting-to-know-you question. */
+  capabilities: string;
   questionLead: string;
   savingMemoryLead: string;
-  scoutsLead: string;
   ideasHandoffLead: string;
   ideasFailed: string;
   ideasOffline: string;
@@ -20,7 +21,20 @@ export interface WelcomeCopy {
   takeaway(summary: string): string;
   pickedIdea(idea: AppIdea): string;
   finishedNoPick: string;
+  /** Closes the welcome, as its own message after the first-app build. */
+  finishedAfterBuild: string;
   alreadyDone: string;
+}
+
+// Every message ends on a full stop, question or exclamation mark, or an
+// ellipsis. The memory agent's summary is model-written, so it gets one added
+// when it stops short.
+const END_PUNCTUATION = /[.!?…。！？」）)"”]$/;
+
+export function withEndPunctuation(text: string, locale: WelcomeLocale): string {
+  const trimmed = text.trimEnd();
+  if (!trimmed || END_PUNCTUATION.test(trimmed)) return trimmed;
+  return `${trimmed}${locale === "zh-CN" ? "。" : "."}`;
 }
 
 function serverCopy(locale: WelcomeLocale): WelcomeMessages["server"] {
@@ -33,16 +47,18 @@ export function copyFor(locale: WelcomeLocale): WelcomeCopy {
     greet: (guardianName, agentName) => formatMessage(copy.greet, { guardianName, agentName }),
     greetNoName: (agentName) => formatMessage(copy.greetNoName, { agentName }),
     connectAiLead: copy.connectAiLead,
+    capabilities: copy.capabilities,
     questionLead: copy.questionLead,
     savingMemoryLead: copy.savingMemoryLead,
-    scoutsLead: copy.scoutsLead,
     ideasHandoffLead: copy.ideasHandoffLead,
     ideasFailed: copy.ideasFailed,
     ideasOffline: copy.ideasOffline,
     unexpectedError: copy.unexpectedError,
-    takeaway: (summary) => formatMessage(copy.takeaway, { summary }),
+    takeaway: (summary) =>
+      formatMessage(copy.takeaway, { summary: withEndPunctuation(summary, locale) }),
     pickedIdea: (idea) => formatMessage(copy.pickedIdea, { title: idea.title }),
     finishedNoPick: copy.finishedNoPick,
+    finishedAfterBuild: copy.finishedAfterBuild,
     alreadyDone: copy.alreadyDone,
   };
 }
