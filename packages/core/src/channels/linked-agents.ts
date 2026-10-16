@@ -3,7 +3,8 @@
 // docs/architecture/channels.md#linked-agents.
 
 import type { ChannelMessageHookDeps } from "@rome-os/app-runtime";
-import { isMainAgent, LINKABLE_SERVICES } from "@rome/api-types/linked-agents";
+import { LINKABLE_SERVICES } from "@rome/api-types/linked-agents";
+import { isCoreMainAgentId } from "../apps/artifact-id.js";
 import type { ChannelRecordsRepository } from "../db/repositories/channel-records.js";
 import { createLogger } from "../logger.js";
 
@@ -25,7 +26,7 @@ export function linkedAgentResolver(
   return (channelName) => {
     if (!LINKABLE_SERVICES.has(records.serviceOf(channelName))) return undefined;
     const agent = records.byId(channelName)?.agent ?? null;
-    if (agent === null || isMainAgent(agent) || agents.has(agent)) {
+    if (agent === null || isCoreMainAgentId(agent) || agents.has(agent)) {
       warned.delete(channelName);
       return agent;
     }
