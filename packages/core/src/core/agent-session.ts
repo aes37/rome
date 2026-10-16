@@ -1966,6 +1966,20 @@ function toolResultSuspendsTurn(output: unknown): boolean {
   );
 }
 
+/**
+ * The status the turn_end bracket reports for `terminal`. Same precedence as
+ * classifyAgentTurnStatus: a user stop is reported as `interrupted` even when
+ * the provider surfaced the abort as an error block, so consumers can tell a
+ * graceful stop from a true failure without peeking back into the terminal's
+ * accounting.
+ */
+function turnEndStatus(sink: TurnSink, terminal: AgentEvent): TurnOutcome["status"] {
+  const accounting =
+    terminal.type === "result" || terminal.type === "error" ? terminal.accounting : undefined;
+  if (sink.lifecycleInterrupted || isInterruptedAccounting(accounting)) return "interrupted";
+  return terminal.type === "error" ? "error" : "completed";
+}
+
 function validateProviderStructuredResult(
   message: AgentEvent,
   compiled: CompiledOutputSchema | undefined,
@@ -2463,18 +2477,7 @@ class AgentSessionImpl implements AgentSession {
     // Turns that fail before dispatchTurnStarted have no start timestamp;
     // report 0 rather than a since-epoch wall clock.
     const startMs = sink.lifecycleStartedAtMs;
-    // Same precedence as classifyAgentTurnStatus: a user stop is reported as
-    // `interrupted` even when the provider surfaced the abort as an error
-    // block, so consumers can tell a graceful stop from a true failure
-    // without peeking back into the terminal's accounting.
-    const accounting =
-      terminal.type === "result" || terminal.type === "error" ? terminal.accounting : undefined;
-    const interrupted = sink.lifecycleInterrupted || isInterruptedAccounting(accounting);
-    sink.endStatus = interrupted
-      ? "interrupted"
-      : terminal.type === "error"
-        ? "error"
-        : "completed";
+    sink.endStatus = turnEndStatus(sink, terminal);
     this.publishOutbound(sink, {
       type: "turn_end",
       turnId: sink.turnId,
@@ -3662,14 +3665,31 @@ class AgentSessionImpl implements AgentSession {
         await waitForSinkClose();
       };
 
-      // What a middleware's next() resolves with. The model's turn_end status
-      // when the model ran, else the terminal an inner middleware emitted.
-      const readOutcome = (): TurnOutcome => ({
-        status: sink.lifecycleInterrupted
-          ? "interrupted"
-          : (sink.endStatus ?? (emittedTerminal?.type === "error" ? "error" : "completed")),
-        suspended: sink.suspended,
-      });
+      // The terminal a turn that never reached the model ends on: the one a
+      // middleware emitted, else a synthesized empty result, checked against
+      // the output schema. An interrupted turn publishes none, so it skips the
+      // check.
+      const shortCircuitTerminal = (): TurnResultEvent | TurnErrorEvent => {
+        if (emittedTerminal) return emittedTerminal;
+        const empty: TurnResultEvent = { type: "result", content: "" };
+        if (sink.lifecycleInterrupted) return empty;
+        return validateProviderStructuredResult(
+          empty,
+          this.structuredOutputValidator,
+          sink.outputSchemaSuspended,
+        ) as TurnResultEvent | TurnErrorEvent;
+      };
+
+      // What a middleware's next() resolves with: the status turn_end reports.
+      // An inner middleware that did not await next() returns while the model
+      // still runs, so this waits for the model's terminal.
+      const readOutcome = async (): Promise<TurnOutcome> => {
+        if (modelRan) await waitForSinkClose();
+        return {
+          status: sink.endStatus ?? turnEndStatus(sink, shortCircuitTerminal()),
+          suspended: sink.suspended,
+        };
+      };
 
       const chain = this.deps.turnMiddleware;
       if (chain) {
@@ -3706,19 +3726,11 @@ class AgentSessionImpl implements AgentSession {
             turnId,
           );
         }
-        let terminal: TurnResultEvent | TurnErrorEvent = emittedTerminal ?? {
-          type: "result",
-          content: "",
-        };
+        const terminal = shortCircuitTerminal();
         // A middleware that short-circuits without a terminal, such as a turn
         // parked on a question card, still publishes one. An interrupted turn
         // publishes none, as an interrupt before the model starts does.
         if (!emittedTerminal && !sink.lifecycleInterrupted) {
-          terminal = validateProviderStructuredResult(
-            terminal,
-            this.structuredOutputValidator,
-            sink.outputSchemaSuspended,
-          ) as TurnResultEvent | TurnErrorEvent;
           this.publishOutbound(sink, terminal);
         }
         this.finalizeTurn(sink, terminal);

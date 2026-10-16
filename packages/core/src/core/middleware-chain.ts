@@ -54,7 +54,11 @@ export interface MiddlewareChain<Ctx, Outcome = void> {
   /** Execute the onion around `terminal`. With an empty chain this is exactly
    *  `await terminal()`. Each middleware's `next()` resolves with
    *  `readOutcome()`, read once the layers inside it have finished. */
-  run(ctx: Ctx, terminal: MiddlewareTerminal, readOutcome?: () => Outcome): Promise<void>;
+  run(
+    ctx: Ctx,
+    terminal: MiddlewareTerminal,
+    readOutcome?: () => Outcome | Promise<Outcome>,
+  ): Promise<void>;
   /** Number of loaded middlewares (0 ⇒ pure passthrough). */
   size(): number;
 }
@@ -120,7 +124,7 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
           }
           nextCalled = true;
           await dispatch(i + 1);
-          return readOutcome();
+          return await readOutcome();
         };
         try {
           await wrapHookSpan(
