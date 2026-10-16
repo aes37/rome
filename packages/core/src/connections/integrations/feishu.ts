@@ -512,7 +512,6 @@ export function createFeishuDescriptor(deps: FeishuDescriptorDeps): ConnectionDe
 
   return {
     service: "feishu",
-    severalAccounts: true,
     reviveProfile: (_grant, record) => reviveFeishuProfile(record),
     auth: {
       app: appScheme,
