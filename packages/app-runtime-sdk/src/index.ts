@@ -727,8 +727,10 @@ export interface TurnMiddlewareContext {
   meta: { synthetic?: boolean };
 }
 
-/** How the turn behind `next()` ended, whether the model or an inner
- *  middleware produced it. */
+/** How the layers inside this middleware ended the turn, whether the model or
+ *  an inner middleware produced it. It reflects those layers as they stood when
+ *  they returned. This middleware, an outer one, or a Stop before the turn
+ *  closes can still change what `turn_end` reports. */
 export interface TurnOutcome {
   /** `interrupted` when the guardian stopped the turn, `error` when it failed,
    *  `completed` otherwise. */
@@ -739,8 +741,10 @@ export interface TurnOutcome {
 }
 
 /** Continue the onion: rewrite-then-continue and post-process both call this;
- *  a short-circuiting middleware simply never does. Resolves once the inner
- *  turn has ended, with how it ended. */
+ *  a short-circuiting middleware simply never does. Resolves once the layers
+ *  inside have finished, with how they ended the turn. Hosts older than this
+ *  type resolve it with nothing, so a middleware that may run on one should
+ *  check the value before reading it. */
 export type TurnMiddlewareNext = () => Promise<TurnOutcome>;
 
 export interface TurnMiddlewareHook {

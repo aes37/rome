@@ -47,18 +47,23 @@ export interface MiddlewareLoadFailure {
  */
 export type MiddlewareTerminal = () => Promise<void>;
 
+/** Reads what `next()` resolves with, once the layers inside have finished. */
+export type OutcomeReader<Outcome> = () => Outcome | Promise<Outcome>;
+
+/** `run`'s reader argument: required unless `next()` resolves with nothing. */
+type OutcomeReaderArg<Outcome> = [Outcome] extends [void]
+  ? []
+  : [readOutcome: OutcomeReader<Outcome>];
+
 export interface MiddlewareChain<Ctx, Outcome = void> {
   /** (Re)load all artifacts of this kind from the catalog. Returns any
    *  per-artifact load failures (a bad middleware is dropped, never fatal). */
   loadFromCatalog(catalog: AppCatalog): Promise<MiddlewareLoadFailure[]>;
   /** Execute the onion around `terminal`. With an empty chain this is exactly
    *  `await terminal()`. Each middleware's `next()` resolves with
-   *  `readOutcome()`, read once the layers inside it have finished. */
-  run(
-    ctx: Ctx,
-    terminal: MiddlewareTerminal,
-    readOutcome?: () => Outcome | Promise<Outcome>,
-  ): Promise<void>;
+   *  `readOutcome()`, read once the layers inside it have finished. A chain
+   *  whose `next()` resolves with nothing takes no reader. */
+  run(ctx: Ctx, terminal: MiddlewareTerminal, ...outcome: OutcomeReaderArg<Outcome>): Promise<void>;
   /** Number of loaded middlewares (0 ⇒ pure passthrough). */
   size(): number;
 }
@@ -104,7 +109,9 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
       return failures;
     },
 
-    async run(ctx, terminal, readOutcome = () => undefined as Outcome) {
+    async run(ctx, terminal, ...outcome) {
+      // Absent only when Outcome is void, so next() then resolves with nothing.
+      const readOutcome = (outcome as [OutcomeReader<Outcome>?])[0];
       const chain = middlewares;
       if (chain.length === 0) {
         await terminal();
@@ -124,7 +131,7 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
           }
           nextCalled = true;
           await dispatch(i + 1);
-          return await readOutcome();
+          return (await readOutcome?.()) as Outcome;
         };
         try {
           await wrapHookSpan(
