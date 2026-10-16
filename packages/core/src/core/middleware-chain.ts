@@ -155,6 +155,9 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
           // means it handled any failure, as `try { await next() } catch` does.
           if (!innerSettled) await inner;
         } catch (err) {
+          // Its error leaves this layer only once the layers it started have
+          // ended, so no outer next() resolves while they still run.
+          if (nextCalled) await inner?.catch(() => {});
           const mode = mw.hook.onError ?? "fail-open";
           if (mode === "fail-closed") {
             throw err;
@@ -166,7 +169,6 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
             error: err instanceof Error ? err.message : String(err),
           });
           if (!nextCalled) await next();
-          else await inner?.catch(() => {});
         }
       };
 

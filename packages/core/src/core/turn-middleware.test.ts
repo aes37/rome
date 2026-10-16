@@ -312,6 +312,59 @@ describe("TurnMiddlewareChain", () => {
     await expect(chain.run(makeCtx(), async () => {}, completed)).rejects.toThrow("late failure");
   });
 
+  it("waits for the layers a throwing middleware started before its error leaves", async () => {
+    const outer = await createMiddlewareDir(
+      "drain-outer",
+      `{
+        order: 0,
+        async handle(ctx, next) {
+          try {
+            await next();
+          } catch {}
+          ctx.emit({ type: "text", content: "outer done" });
+        },
+      }`,
+    );
+    const throwing = await createMiddlewareDir(
+      "drain-middle",
+      `{
+        order: 1,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          void next().catch(() => {});
+          throw new Error("middle broke");
+        },
+      }`,
+    );
+    const slow = await createMiddlewareDir(
+      "drain-inner",
+      `{
+        order: 2,
+        async handle(ctx, next) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          ctx.emit({ type: "text", content: "inner done" });
+          await next();
+        },
+      }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([
+        hookRef("app.outer", outer),
+        hookRef("app.throwing", throwing),
+        hookRef("app.slow", slow),
+      ]),
+    );
+
+    const emitted: AgentEvent[] = [];
+    await chain.run(makeCtx("main", emitted), async () => {}, completed);
+
+    expect(emitted).toEqual([
+      { type: "text", content: "inner done" },
+      { type: "text", content: "outer done" },
+    ]);
+  });
+
   it("reports artifacts that do not implement handle()", async () => {
     const dir = await createMiddlewareDir("invalid", `{ order: 0 }`);
     const chain = createTurnMiddlewareChain();
