@@ -80,7 +80,7 @@ import { createAccountNames } from "./channels/account-names.js";
 import { agentsAccounts, externalAgents } from "./channels/agents-accounts.js";
 import { channelList, joinLaterChannel } from "./channels/channel-list.js";
 import { claimChannels } from "./channels/claim-channels.js";
-import { withLinkedAgent } from "./channels/linked-agents.js";
+import { linkedAgentResolver } from "./channels/linked-agents.js";
 import { recordedChannelOf } from "./channels/connection-ports.js";
 import { ChannelRecordsRepository } from "./db/repositories/channel-records.js";
 import { sendApprovalCard } from "./actions/approval-card.js";
@@ -1184,14 +1184,9 @@ async function main() {
   const accountNames = createAccountNames({ channels, sentinelLogRepo });
 
   // The channel-message hook hears every channel through these, so each
-  // inbound message it handles is traced and logged once, and reads the agent
-  // linked to it. withInboundSpans copies only a channel that can receive, so
-  // the link goes on those alone and never on a shared channel.
-  const forHook = (list: typeof channels) =>
-    withInboundSpans(list, "channel-message").map((channel) =>
-      channel.inbound ? withLinkedAgent(channel, channelRecords, agentLoader) : channel,
-    );
-  const hookChannels = forHook(channels);
+  // inbound message it handles is traced and logged once.
+  const hookChannels = withInboundSpans(channels, "channel-message");
+  const linkedAgentOf = linkedAgentResolver(channelRecords, agentLoader);
   let messageHook: ChannelMessageHook = createNoopChannelMessageHook();
   const channelMessageHookArtifact = appCatalog
     .listArtifacts("hook")
@@ -1203,6 +1198,7 @@ async function main() {
         conversationSettings,
         chatStop,
         channels: hookChannels,
+        linkedAgentOf,
       });
       if (loadedHook) {
         messageHook = loadedHook;
@@ -1237,7 +1233,13 @@ async function main() {
   const reloadChannelMessageHook = messageHandlerRegistered
     ? createChannelMessageHookReloader({
         catalog: appCatalog,
-        deps: { actionEngine, conversationSettings, chatStop, channels: hookChannels },
+        deps: {
+          actionEngine,
+          conversationSettings,
+          chatStop,
+          channels: hookChannels,
+          linkedAgentOf,
+        },
         getCurrent: () => messageHook,
         setCurrent: (hook) => {
           messageHook = hook;
@@ -1255,7 +1257,7 @@ async function main() {
       connection,
     );
     if (!channel) return;
-    const added = forHook([channel]);
+    const added = withInboundSpans([channel], "channel-message");
     hookChannels.push(...added);
     const hook = messageHook;
     // A hook without `addChannels` re-registers, as the app-keys reloader

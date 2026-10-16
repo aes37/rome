@@ -306,47 +306,29 @@ function requireConversationRepository(deps: MessageHandlerRuntimeDeps): Convers
   return repository;
 }
 
-async function resolveRequestedAgent(
-  deps: MessageHandlerRuntimeDeps,
-  requestedAgent: string,
-): Promise<string> {
-  if (requestedAgent === "main") return "main";
-  try {
-    return (await deps.agentRunner.hasAgent?.(requestedAgent)) === false ? "main" : requestedAgent;
-  } catch (err) {
-    log.warn("hasAgent check failed; honoring requested agent", {
-      requestedAgent,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return requestedAgent;
-  }
-}
-
 /**
- * The agent that answers on an account linked to `linkedAgent`: main for
- * `core:main`, the linked agent while it is loaded, and null when it is not,
- * which leaves the account silent. The host passes no agent it knows is not
- * loaded, so a null here means the agent was unloaded since.
+ * `requested` while it is loaded, or `fallback` when it is not. Main, in
+ * either spelling, is always loaded and resolves to `main`. A failed check
+ * honors `requested`.
  */
-async function resolveLinkedAgent(
+async function resolveAgent<F extends string | null>(
   deps: MessageHandlerRuntimeDeps,
-  channel: string,
-  linkedAgent: string,
-): Promise<string | null> {
-  if (isCoreMainAgentId(linkedAgent)) return "main";
+  requested: string,
+  fallback: F,
+): Promise<string | F> {
+  if (isCoreMainAgentId(requested)) return "main";
   try {
-    if ((await deps.agentRunner.hasAgent?.(linkedAgent)) === false) {
-      log.warn("linked agent is not loaded; the account stays silent", { channel, linkedAgent });
-      return null;
+    if ((await deps.agentRunner.hasAgent?.(requested)) === false) {
+      log.warn("agent is not loaded", { agent: requested, fallback });
+      return fallback;
     }
   } catch (err) {
-    log.warn("hasAgent check failed; honoring linked agent", {
-      channel,
-      linkedAgent,
+    log.warn("hasAgent check failed; honoring requested agent", {
+      agent: requested,
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  return linkedAgent;
+  return requested;
 }
 
 // ---------------------------------------------------------------------------
@@ -629,9 +611,11 @@ export function createMessageHandlerAction(
           typeof args.linkedAgentName === "string" && args.linkedAgentName.trim()
             ? args.linkedAgentName.trim()
             : undefined;
+        // The host passes no agent it knows is not loaded, so a null here
+        // means the linked agent was unloaded since, and the account is silent.
         const answeringAgent = linkedAgent
-          ? await resolveLinkedAgent(deps, channel, linkedAgent)
-          : "main";
+          ? await resolveAgent(deps, linkedAgent, null)
+          : undefined;
         if (answeringAgent === null) {
           return { status: "ok", data: { action: "silent" } };
         }
@@ -667,7 +651,9 @@ export function createMessageHandlerAction(
           typeof args.routedAgentName === "string" && args.routedAgentName.trim()
             ? args.routedAgentName.trim()
             : "main";
-        const initialAgent = await resolveRequestedAgent(deps, requestedAgent);
+        // A conversation on a linked account stores no agent of its own.
+        const initialAgent =
+          answeringAgent === undefined ? await resolveAgent(deps, requestedAgent, "main") : "main";
         const parentThreadId =
           typeof args.parentThreadId === "string" && args.parentThreadId
             ? args.parentThreadId
@@ -682,11 +668,11 @@ export function createMessageHandlerAction(
           projectName: selectedProjectName,
           projectPath: selectedProjectPath,
         });
-        // Root conversations retain their persisted override. Native thread
-        // sessions are refreshed by the repository from their parent's. The
-        // linked agent is never stored, so a relink takes effect on the next
-        // message.
-        const targetAgent = conversation.agentName ?? answeringAgent;
+        // The linked agent answers whatever the conversation stores, and is
+        // never stored, so a relink takes effect on the next message.
+        // Elsewhere root conversations retain their persisted override, and
+        // native thread sessions are refreshed from their parent's.
+        const targetAgent = answeringAgent ?? conversation.agentName ?? "main";
         const platformMessageId =
           typeof args.messageId === "string" && args.messageId
             ? args.messageId

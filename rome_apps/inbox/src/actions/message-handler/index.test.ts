@@ -1035,8 +1035,29 @@ describe("linked agent", () => {
     expect(agentRunner.calls[0].agentName).toBe("main");
   });
 
-  it("answers with the conversation's override before the linked agent", async () => {
-    const { deps, agentRunner } = guardianDeps([
+  it("answers with the linked agent over a group's choice and a stored agent", async () => {
+    const { deps, agentRunner, conversations } = guardianDeps([
+      "main",
+      "sentinel",
+      "envoy",
+      "sales:agent",
+      "pm:assistant",
+    ]);
+    conversations.ensureChannelConversation.mockImplementation(async () => ({
+      id: "channel:feishu-2:group-1",
+      agentName: "pm:assistant",
+    }));
+    const action = createAction(actionConfig, deps);
+
+    await action.execute(
+      inbound({ routedAgentName: "pm:assistant", linkedAgentName: "sales:agent" }),
+    );
+
+    expect(agentRunner.calls[0].agentName).toBe("sales:agent");
+  });
+
+  it("stores no group choice on a linked account's conversation", async () => {
+    const { deps, conversations } = guardianDeps([
       "main",
       "sentinel",
       "envoy",
@@ -1049,7 +1070,9 @@ describe("linked agent", () => {
       inbound({ routedAgentName: "pm:assistant", linkedAgentName: "sales:agent" }),
     );
 
-    expect(agentRunner.calls[0].agentName).toBe("pm:assistant");
+    expect(conversations.ensureChannelConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "feishu-2", agentName: "main" }),
+    );
   });
 
   it("never stores the linked agent on the conversation", async () => {

@@ -73,12 +73,13 @@ export interface MessageHandlerInput {
   personOverride?: MessageHandlerPersonOverride;
   /** Optional project working directory for this dedicated chat session. */
   workingDir?: string;
-  /** The conversation's agent override (`routing.agentName`). The
-   *  conversation stores it, and it answers before the linked agent. */
+  /** The conversation's agent choice (`routing.agentName`), which the
+   *  conversation stores. Ignored when `linkedAgentName` is set. */
   routedAgentName?: string;
   /** Canonical id of the agent linked to the account the message arrived on.
-   *  The conversation never stores it. When that agent is not loaded, nothing
-   *  answers. Absent on an account that takes no link, where main answers. */
+   *  It answers whatever the conversation stores or chose, and the
+   *  conversation never stores it. When that agent is not loaded, nothing
+   *  answers. Absent on an account that takes no link. */
   linkedAgentName?: string;
 }
 

@@ -33,7 +33,11 @@ export class ChannelMessageHook implements ChannelMessageHookInterface {
     private readonly conversationSettings: ConversationSettingsControl,
     private readonly chatStop: ChatStopHandler,
     private readonly channels: readonly Channel[],
-    private readonly options: { slowTurnMs?: number; log?: Pick<typeof log, "warn"> } = {},
+    private readonly options: {
+      slowTurnMs?: number;
+      log?: Pick<typeof log, "warn">;
+      linkedAgentOf?: ChannelMessageHookDeps["linkedAgentOf"];
+    } = {},
   ) {}
 
   /** Subscribe to every channel that can receive. A channel's subscription
@@ -90,17 +94,6 @@ export class ChannelMessageHook implements ChannelMessageHookInterface {
       return;
     }
 
-    // Read per message, since a relink changes it on the same channel. An
-    // account with no linked agent answers nothing, not even `/stop`.
-    const linkedAgent = channel.linkedAgent;
-    if (linkedAgent === null) {
-      log.debug("account has no linked agent; not answering", {
-        service,
-        messageId: message.messageId,
-      });
-      return;
-    }
-
     // A program sends on `agents`, not a person, so `/stop` there is text for
     // the model, and `message_handler` decides whether Rome answers it.
     if (service !== AGENTS_CHANNEL && isStopCommand(message.text)) {
@@ -135,11 +128,25 @@ export class ChannelMessageHook implements ChannelMessageHookInterface {
       return;
     }
 
+    // Read per message, since a relink changes it on the same channel. `/stop`
+    // above still reaches a turn that started before an unlink.
+    const linkedAgent = this.options.linkedAgentOf?.(service);
+    if (linkedAgent === null) {
+      log.debug("account has no linked agent; not answering", {
+        service,
+        messageId: message.messageId,
+      });
+      return;
+    }
+
     let enabled = true;
     let routedAgentName: string | undefined;
     const snapshot = await this.conversationSettings.get(ref);
     enabled = snapshot.effective.enabled;
-    routedAgentName = snapshot.effective.routing.agentName ?? undefined;
+    // On an account that takes a link, the linked agent answers every
+    // conversation, so a per-group agent choice does not apply.
+    routedAgentName =
+      linkedAgent === undefined ? (snapshot.effective.routing.agentName ?? undefined) : undefined;
     if (!enabled) {
       log.debug("conversation disabled", { connectionId, conversationId: message.conversationId });
       return;
@@ -292,5 +299,6 @@ export function createHook(deps: ChannelMessageHookDeps): ChannelMessageHookInte
     deps.conversationSettings,
     deps.chatStop,
     deps.channels,
+    { linkedAgentOf: deps.linkedAgentOf },
   );
 }

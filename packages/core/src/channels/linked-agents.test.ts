@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, rs } from "@rstest/core";
 import type { ChannelRecord } from "../db/repositories/channel-records.js";
-import { withLinkedAgent } from "./linked-agents.js";
+import { linkedAgentResolver } from "./linked-agents.js";
 
 const warn = rs.hoisted(() => rs.fn());
 
@@ -8,49 +8,66 @@ rs.mock("../logger.js", () => ({
   createLogger: () => ({ debug: rs.fn(), info: rs.fn(), warn, error: rs.fn() }),
 }));
 
-type Linked = { name: string; linkedAgent?: string | null };
-
-describe("withLinkedAgent", () => {
+describe("linkedAgentResolver", () => {
   let agent: string | null;
   let loaded: Set<string>;
-  const services: Record<string, string> = { "feishu-2": "feishu", telegram: "telegram" };
-  const records = {
-    serviceOf: (id: string) => services[id] ?? id,
-    byId: (id: string) =>
-      id === "feishu-2" ? ({ id, service: "feishu", agent } as unknown as ChannelRecord) : null,
+  let records: Map<string, { service: string; agent: string | null }>;
+  const repository = {
+    serviceOf: (id: string) => records.get(id)?.service ?? id,
+    byId: (id: string) => {
+      const record = records.get(id);
+      return record ? ({ id, ...record } as unknown as ChannelRecord) : null;
+    },
   };
   const agents = { has: (name: string) => loaded.has(name) };
 
   beforeEach(() => {
     agent = "sales:agent";
     loaded = new Set(["sales:agent", "support:agent"]);
+    records = new Map();
     warn.mockClear();
   });
 
-  it("reads a linkable channel's agent from its record on each access", () => {
-    const channel: Linked = withLinkedAgent({ name: "feishu-2" }, records, agents);
+  const link = (id: string, service: string) =>
+    records.set(id, {
+      service,
+      get agent() {
+        return agent;
+      },
+    });
 
-    expect(channel.linkedAgent).toBe("sales:agent");
+  it("reads a linkable channel's agent from its record on each call", () => {
+    link("feishu-2", "feishu");
+    const linkedAgentOf = linkedAgentResolver(repository, agents);
+
+    expect(linkedAgentOf("feishu-2")).toBe("sales:agent");
     agent = "support:agent";
-    expect(channel.linkedAgent).toBe("support:agent");
+    expect(linkedAgentOf("feishu-2")).toBe("support:agent");
     agent = "core:main";
-    expect(channel.linkedAgent).toBe("core:main");
+    expect(linkedAgentOf("feishu-2")).toBe("core:main");
     agent = null;
-    expect(channel.linkedAgent).toBeNull();
+    expect(linkedAgentOf("feishu-2")).toBeNull();
+  });
+
+  it("reads a channel whose record lands after it was built", () => {
+    const linkedAgentOf = linkedAgentResolver(repository, agents);
+
+    expect(linkedAgentOf("c-7f3a")).toBeUndefined();
+    link("c-7f3a", "telegram");
+    expect(linkedAgentOf("c-7f3a")).toBe("sales:agent");
   });
 
   it("reads null for a linkable channel no record names", () => {
-    const channel: Linked = withLinkedAgent({ name: "telegram" }, records, agents);
-
-    expect(channel.linkedAgent).toBeNull();
+    expect(linkedAgentResolver(repository, agents)("telegram")).toBeNull();
   });
 
   it("reads null while the linked agent is not loaded, and warns once until it loads", () => {
-    const channel: Linked = withLinkedAgent({ name: "feishu-2" }, records, agents);
+    link("feishu-2", "feishu");
+    const linkedAgentOf = linkedAgentResolver(repository, agents);
     loaded.delete("sales:agent");
 
-    expect(channel.linkedAgent).toBeNull();
-    expect(channel.linkedAgent).toBeNull();
+    expect(linkedAgentOf("feishu-2")).toBeNull();
+    expect(linkedAgentOf("feishu-2")).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.any(String), {
       channel: "feishu-2",
@@ -58,17 +75,17 @@ describe("withLinkedAgent", () => {
     });
 
     loaded.add("sales:agent");
-    expect(channel.linkedAgent).toBe("sales:agent");
+    expect(linkedAgentOf("feishu-2")).toBe("sales:agent");
     loaded.delete("sales:agent");
-    expect(channel.linkedAgent).toBeNull();
+    expect(linkedAgentOf("feishu-2")).toBeNull();
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
-  it("leaves a channel of a service that takes no link without one", () => {
-    for (const name of ["webchat", "email", "agents", "whatsapp"]) {
-      const channel: Linked = withLinkedAgent({ name }, records, agents);
+  it("reads undefined for a channel of a service that takes no link", () => {
+    const linkedAgentOf = linkedAgentResolver(repository, agents);
 
-      expect("linkedAgent" in channel).toBe(false);
+    for (const name of ["webchat", "email", "agents", "whatsapp"]) {
+      expect(linkedAgentOf(name)).toBeUndefined();
     }
   });
 });

@@ -2,46 +2,40 @@
 // Vocabulary: docs/concepts/messaging.md#channels. Invariants:
 // docs/architecture/channels.md#linked-agents.
 
+import type { ChannelMessageHookDeps } from "@rome-os/app-runtime";
 import { isMainAgent, LINKABLE_SERVICES } from "@rome/api-types/linked-agents";
 import type { ChannelRecordsRepository } from "../db/repositories/channel-records.js";
 import { createLogger } from "../logger.js";
-import type { Channel } from "./channel.js";
 
 const log = createLogger("linked-agents");
 
 /**
- * Give `channel` a `linkedAgent` read from its record on each access, so a
- * relink takes effect on the next message. It reads null when no agent is
- * linked, and also when the linked agent is not loaded, which warns once per
- * channel and agent until that agent loads again. A channel of a service
- * outside `LINKABLE_SERVICES` is returned as is, with no `linkedAgent`, and
- * main keeps answering it. Mutates `channel`, so pass the hook's own copy.
+ * The hook's `linkedAgentOf`, reading the channel's record on each call, so a
+ * relink, or a channel whose record lands after wiring, is right on the next
+ * message. It answers undefined for a channel whose service is outside
+ * `LINKABLE_SERVICES`, the stored agent for a linked one, and null for one with
+ * no agent or whose agent is not loaded. An agent that is not loaded warns
+ * once per channel and agent, until that agent loads again.
  */
-export function withLinkedAgent<C extends Pick<Channel, "name">>(
-  channel: C,
+export function linkedAgentResolver(
   records: Pick<ChannelRecordsRepository, "byId" | "serviceOf">,
   agents: { has(name: string): boolean },
-): C {
-  if (!LINKABLE_SERVICES.has(records.serviceOf(channel.name))) return channel;
-  let warnedAbout: string | null = null;
-  Object.defineProperty(channel, "linkedAgent", {
-    get: () => {
-      const agent = records.byId(channel.name)?.agent ?? null;
-      if (agent === null || isMainAgent(agent) || agents.has(agent)) {
-        warnedAbout = null;
-        return agent;
-      }
-      if (warnedAbout !== agent) {
-        warnedAbout = agent;
-        log.warn("linked agent is not loaded; the account stays silent", {
-          channel: channel.name,
-          agent,
-        });
-      }
-      return null;
-    },
-    enumerable: false,
-    configurable: true,
-  });
-  return channel;
+): NonNullable<ChannelMessageHookDeps["linkedAgentOf"]> {
+  const warned = new Map<string, string>();
+  return (channelName) => {
+    if (!LINKABLE_SERVICES.has(records.serviceOf(channelName))) return undefined;
+    const agent = records.byId(channelName)?.agent ?? null;
+    if (agent === null || isMainAgent(agent) || agents.has(agent)) {
+      warned.delete(channelName);
+      return agent;
+    }
+    if (warned.get(channelName) !== agent) {
+      warned.set(channelName, agent);
+      log.warn("linked agent is not loaded; the account stays silent", {
+        channel: channelName,
+        agent,
+      });
+    }
+    return null;
+  };
 }
