@@ -671,7 +671,9 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
 
   return (
     <div className="flex shrink-0 flex-col pb-2">
-      <nav className="flex flex-col gap-1 px-3">{fixedEntries.map(renderBuiltinRow)}</nav>
+      <nav aria-label={t("sidebar.menu")} className="flex flex-col gap-1 px-3">
+        {fixedEntries.map(renderBuiltinRow)}
+      </nav>
       {moreExpanded ? (
         <nav
           id="sidebar-more"

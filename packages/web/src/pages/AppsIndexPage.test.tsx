@@ -990,12 +990,12 @@ describe("AppsIndexPage ghost tiles", () => {
     const mySection = screen.getByRole("region", { name: "My apps" });
     const storeSection = screen.getByRole("region", { name: "Installed apps" });
     expect(within(storeSection).getByRole("button", { name: "Browse store" })).toBeTruthy();
-    // A zero count renders no pill. The built-in section stays, empty, even
-    // though it has no ghost tile to offer.
-    const builtinSection = screen.getByRole("region", { name: "Built-in apps" });
-    for (const section of [mySection, storeSection, builtinSection]) {
+    // A zero count renders no pill.
+    for (const section of [mySection, storeSection]) {
       expect(within(section).queryByText("0")).toBeNull();
     }
+    // The built-in section has no ghost tile to offer, so an empty one is gone.
+    expect(screen.queryByRole("region", { name: "Built-in apps" })).toBeNull();
   });
 
   it("seeds a chat draft from the New app ghost tile", async () => {

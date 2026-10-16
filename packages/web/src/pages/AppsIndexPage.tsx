@@ -415,9 +415,10 @@ export default function AppsIndexPage() {
 
   // While a search is active, a section with no matches disappears entirely;
   // during load every section stays mounted so the skeletons have a home.
+  // Built-in apps has no ghost tile, so it also disappears when it is empty.
   const showMySection = apps === null || !isSearching || visibleMyApps.length > 0;
   const showStoreSection = apps === null || !isSearching || visibleStoreApps.length > 0;
-  const showBuiltinSection = apps === null || !isSearching || visibleBuiltinApps.length > 0;
+  const showBuiltinSection = apps === null || visibleBuiltinApps.length > 0;
 
   // The "New app" ghost tile hands off to the chat composer with a seeded
   // draft — app creation is an agent task (app_management create), not a

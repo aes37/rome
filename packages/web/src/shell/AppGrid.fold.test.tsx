@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, useNavigate } from "react-router-dom";
 import i18n from "@/i18n";
-import { AppGrid } from "./AppGrid";
+import { APP_NAV, AppGrid, SIDEBAR_FIXED_IDS, SIDEBAR_MORE_IDS } from "./AppGrid";
 
 const fetchMock = rs.fn(async (input: RequestInfo | URL): Promise<Response> => {
   const url = String(input);
@@ -55,6 +55,22 @@ afterEach(() => {
   cleanup();
   rs.unstubAllGlobals();
   localStorage.clear();
+});
+
+describe("sidebar menu", () => {
+  it("reaches every built-in page from the menu, the fold, the Apps header or the profile menu", () => {
+    const navIds = APP_NAV.map((entry) => entry.id);
+    const sidebarIds = [...SIDEBAR_FIXED_IDS, ...SIDEBAR_MORE_IDS];
+    // App Store opens from the Apps page header, Settings from the profile menu.
+    expect(new Set([...sidebarIds, "store", "settings"])).toEqual(new Set(navIds));
+    expect(sidebarIds.filter((id) => !navIds.includes(id))).toEqual([]);
+    expect(new Set(sidebarIds).size).toBe(sidebarIds.length);
+  });
+
+  it("names the fixed menu's landmark", () => {
+    renderSidebar("/chat");
+    expect(screen.getByRole("navigation", { name: "Menu" })).toBeTruthy();
+  });
 });
 
 describe("sidebar fold", () => {
