@@ -46,12 +46,16 @@ import { useLongPressMenu } from "@/hooks/use-long-press-menu";
 import { useSidebarPins } from "@/hooks/use-sidebar-pins";
 
 // First-party apps with nothing for the guardian to open from the launcher: any
-// without a page (the server reports `hasFrontend`), and browser automation,
-// whose page is the agent's tooling. Its manifest can't say that yet.
+// without a page, and browser automation, whose page is the agent's tooling.
+// Its manifest can't say that yet.
 const UNLISTED_BUILTIN_APP_IDS: ReadonlySet<string> = new Set(["browser-automation"]);
 
 function isUnlistedBuiltin(app: InstalledAppCard): boolean {
-  return app.origin === "builtin" && (!app.hasFrontend || UNLISTED_BUILTIN_APP_IDS.has(app.id));
+  if (app.origin !== "builtin") return false;
+  if (UNLISTED_BUILTIN_APP_IDS.has(app.id)) return true;
+  // The server knows whether an app has a page only once it resolves, so a
+  // disabled, failed or installing app keeps its tile and the way to fix it.
+  return app.status === "active" && !isInFlight(app.phase) && !app.hasFrontend;
 }
 
 function isInFlight(phase: AppViewState): boolean {

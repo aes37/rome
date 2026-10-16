@@ -37,6 +37,7 @@ function renderSidebar(initialEntry: string, { collapsed = false } = {}) {
       <MemoryRouter initialEntries={[initialEntry]}>
         <AppGrid collapsed={collapsed} />
         <GoTo path="/people" />
+        <GoTo path="/memory/journal" />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -93,6 +94,15 @@ describe("sidebar fold", () => {
 
     const fold = screen.getByRole("navigation", { name: "More" });
     expect(within(fold).getByRole("link", { name: "People" })).toBeTruthy();
+  });
+
+  it("stays folded when the guardian moves within the same page", async () => {
+    renderSidebar("/memory");
+    await userEvent.click(screen.getByRole("button", { name: "Show fewer pages" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Go to /memory/journal" }));
+
+    expect(screen.queryByRole("navigation", { name: "More" })).toBeNull();
   });
 
   it("starts open on one of its pages, before any effect runs", () => {

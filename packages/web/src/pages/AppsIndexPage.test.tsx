@@ -370,6 +370,28 @@ describe("AppsIndexPage reactivity", () => {
     });
   });
 
+  it("keeps a built-in app that isn't running, so the guardian can still fix it", async () => {
+    mockBackend({
+      installed: [
+        // An app that isn't resolved reports no page, whether or not it has one.
+        installedCard({
+          id: "skills",
+          displayName: "Skills",
+          origin: "builtin",
+          status: "disabled",
+          isEnabled: false,
+        }),
+        installedCard({ id: "inbox", displayName: "Inbox", origin: "builtin", status: "failed" }),
+      ],
+    });
+
+    renderPage();
+
+    const builtinSection = await screen.findByRole("region", { name: "Built-in apps" });
+    expect(await within(builtinSection).findByText("Skills")).toBeTruthy();
+    expect(within(builtinSection).getByText("Inbox")).toBeTruthy();
+  });
+
   it("lists no Rome pages, and leaves out the first-party apps with nothing to open", async () => {
     mockBackend({
       installed: [

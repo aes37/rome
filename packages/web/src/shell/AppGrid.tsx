@@ -469,14 +469,17 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
 
   const fixedEntries = builtinEntries(SIDEBAR_FIXED_IDS);
   const moreEntries = builtinEntries(SIDEBAR_MORE_IDS);
-  const moreActive = isMorePageActive(location.pathname);
+  const activeMoreId = moreEntries.find((entry) =>
+    isEntryActive(location.pathname, entry.href),
+  )?.id;
+  const moreActive = activeMoreId !== undefined;
   // Arriving on one of the group's pages opens the group, so the active row is
   // never hidden behind the fold. It reopens on each such arrival, including a
-  // move between two of its pages, before the browser paints. The guardian can
-  // still fold it afterwards.
+  // move between two of its pages, before the browser paints. A move within
+  // one page leaves it as the guardian set it.
   useLayoutEffect(() => {
-    if (moreActive) setMoreExpanded(true);
-  }, [moreActive, location.pathname]);
+    if (activeMoreId) setMoreExpanded(true);
+  }, [activeMoreId]);
 
   // Only pins whose app is installed with a frontend render; the rest wait in
   // storage in case the app comes back.
@@ -649,22 +652,13 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
       {t("sidebar.done")}
     </Button>
   ) : (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <IconButton
-          size="sm"
-          label={t("sidebar.edit")}
-          icon={<Ellipsis aria-hidden />}
-          className="text-subtle-foreground hover:text-foreground"
-        />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="bottom" align="end">
-        <DropdownMenuItem onSelect={() => setEditing(true)}>
-          <Pencil className="h-3.5 w-3.5 text-subtle-foreground" aria-hidden />
-          {t("sidebar.edit")}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <IconButton
+      size="sm"
+      label={t("sidebar.edit")}
+      icon={<Pencil aria-hidden />}
+      onClick={() => setEditing(true)}
+      className="text-subtle-foreground hover:text-foreground"
+    />
   );
 
   return (
