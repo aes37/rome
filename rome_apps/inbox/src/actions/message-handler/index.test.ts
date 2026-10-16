@@ -963,3 +963,115 @@ describe("per-channel agent routing (trusted path)", () => {
     expect(agentRunner.calls[0].agentName).toBe("sentinel");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The account's linked agent answers when the conversation has no override.
+// An account whose linked agent is not loaded answers nothing.
+// ---------------------------------------------------------------------------
+
+describe("linked agent", () => {
+  beforeEach(() => {
+    rs.clearAllMocks();
+  });
+
+  const guardianPerson: PersonRecord = {
+    id: "guardian",
+    displayName: "Guardian",
+    bondLevel: "guardian",
+    channelMappings: [{ channel: "feishu", channelUserId: "g-feishu" }],
+    profilePath: null,
+  };
+
+  const inbound = (overrides: Record<string, unknown> = {}) => ({
+    channel: "feishu-2",
+    channelUserId: "g-feishu",
+    threadId: "group-1",
+    threadType: "group",
+    displayName: "Guardian",
+    text: "hello",
+    messageId: "msg-1",
+    ...overrides,
+  });
+
+  const guardianDeps = (knownAgents: string[]) =>
+    createMessageHandlerDeps({
+      personMappingRepo: { findByChannelUser: rs.fn(async () => guardianPerson) },
+      knownAgents,
+      agentResponses: [
+        [{ type: "result", content: "Hi." }],
+        [{ type: "result", content: "Hi again." }],
+      ],
+    });
+
+  it("answers with the linked agent, in groups and private chats", async () => {
+    const { deps, agentRunner, approvals } = guardianDeps([
+      "main",
+      "sentinel",
+      "envoy",
+      "sales:agent",
+    ]);
+    const action = createAction(actionConfig, deps);
+
+    await action.execute(inbound({ linkedAgentName: "sales:agent" }));
+    await action.execute(
+      inbound({
+        threadId: "g-feishu",
+        threadType: "private",
+        messageId: "msg-2",
+        linkedAgentName: "sales:agent",
+      }),
+    );
+
+    expect(agentRunner.calls.map((call) => call.agentName)).toEqual(["sales:agent", "sales:agent"]);
+    expect(approvals[0]).toMatchObject({ requestedBy: "sales:agent" });
+  });
+
+  it("answers with main when main is linked", async () => {
+    const { deps, agentRunner } = guardianDeps(["main", "sentinel", "envoy"]);
+    const action = createAction(actionConfig, deps);
+
+    await action.execute(inbound({ linkedAgentName: "core:main" }));
+
+    expect(agentRunner.calls[0].agentName).toBe("main");
+  });
+
+  it("answers with the conversation's override before the linked agent", async () => {
+    const { deps, agentRunner } = guardianDeps([
+      "main",
+      "sentinel",
+      "envoy",
+      "sales:agent",
+      "pm:assistant",
+    ]);
+    const action = createAction(actionConfig, deps);
+
+    await action.execute(
+      inbound({ routedAgentName: "pm:assistant", linkedAgentName: "sales:agent" }),
+    );
+
+    expect(agentRunner.calls[0].agentName).toBe("pm:assistant");
+  });
+
+  it("never stores the linked agent on the conversation", async () => {
+    const { deps, conversations } = guardianDeps(["main", "sentinel", "envoy", "sales:agent"]);
+    const action = createAction(actionConfig, deps);
+
+    await action.execute(inbound({ linkedAgentName: "sales:agent" }));
+
+    expect(conversations.ensureChannelConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "feishu-2", threadId: "group-1", agentName: "main" }),
+    );
+  });
+
+  it("stays silent, storing nothing, when the linked agent is not loaded", async () => {
+    const { deps, agentRunner, conversations } = guardianDeps(["main", "sentinel", "envoy"]);
+    const action = createAction(actionConfig, deps);
+
+    const result = await action.execute(inbound({ linkedAgentName: "sales:agent" }));
+
+    expect(result).toEqual({ status: "ok", data: { action: "silent" } });
+    expect(agentRunner.calls).toHaveLength(0);
+    expect(conversations.ensureChannelConversation).not.toHaveBeenCalled();
+    expect(conversations.addMessage).not.toHaveBeenCalled();
+  });
+});

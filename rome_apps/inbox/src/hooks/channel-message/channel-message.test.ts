@@ -93,8 +93,20 @@ function createHarness(options: ConstructorParameters<typeof ChannelMessageHook>
     (features.get(connectionId)?.[name] ?? null) as ChannelFeatures[K] | null;
   // One channel per Connection, as the channel list builds them.
   const subscribes = rs.fn((_name: string) => undefined);
-  const channel = (name: string, connectionId: string): Channel => ({
+  // A channel that takes a link reads it through a getter, as core's do.
+  const channel = (
+    name: string,
+    connectionId: string,
+    linkedAgent?: () => string | null,
+  ): Channel => ({
     name,
+    ...(linkedAgent
+      ? {
+          get linkedAgent() {
+            return linkedAgent();
+          },
+        }
+      : {}),
     send: {
       send: (conversationId, outgoing) => send(connectionId, conversationId, outgoing),
       get activity() {
@@ -440,6 +452,54 @@ describe("ChannelMessageHook", () => {
     await expect(harness.emit(FEISHU_2_ID, message())).rejects.toThrow("no subscription");
     await harness.hook.register();
     expect(harness.subscribes).toHaveBeenCalledTimes(8);
+  });
+
+  it("passes the account's linked agent as it reads when each message arrives", async () => {
+    let linked: string | null = "sales:agent";
+    harness.channels.push(harness.channel("feishu-2", FEISHU_2_ID, () => linked));
+    await harness.hook.register();
+    harness.get.mockImplementation(async ({ connectionId, conversationId }) =>
+      snapshot(connectionId, conversationId, { agentName: "override" }),
+    );
+
+    await harness.emit(FEISHU_2_ID, message({ messageId: "m-1" }));
+    linked = "support:agent";
+    await harness.emit(FEISHU_2_ID, message({ messageId: "m-2" }));
+    await harness.emit(TELEGRAM_ID, message({ messageId: "m-3" }));
+
+    const passed = (linkedAgentName: string | undefined) => [
+      "message_handler",
+      expect.objectContaining({ routedAgentName: "override", linkedAgentName }),
+      expect.anything(),
+    ];
+    expect(harness.run).toHaveBeenNthCalledWith(1, ...passed("sales:agent"));
+    expect(harness.run).toHaveBeenNthCalledWith(2, ...passed("support:agent"));
+    expect(harness.run).toHaveBeenNthCalledWith(3, ...passed(undefined));
+  });
+
+  it("answers nothing, /stop included, on an account with no linked agent", async () => {
+    let linked: string | null = null;
+    harness.channels.push(harness.channel("feishu-2", FEISHU_2_ID, () => linked));
+    await harness.hook.register();
+
+    await harness.emit(FEISHU_2_ID, message({ messageId: "m-1" }));
+    await harness.emit(
+      FEISHU_2_ID,
+      message({ messageId: "m-2", text: "/stop", thread: { kind: "dm" } }),
+    );
+
+    expect(harness.run).not.toHaveBeenCalled();
+    expect(harness.stop).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.get).not.toHaveBeenCalled();
+
+    linked = "sales:agent";
+    await harness.emit(FEISHU_2_ID, message({ messageId: "m-3" }));
+    expect(harness.run).toHaveBeenCalledWith(
+      "message_handler",
+      expect.objectContaining({ channel: "feishu-2", linkedAgentName: "sales:agent" }),
+      expect.anything(),
+    );
   });
 
   it("refuses, by name, a host that passes no channels", () => {

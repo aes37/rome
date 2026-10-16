@@ -40,7 +40,7 @@ App actions reach channels through one service, `deps.channelsService` ([`Channe
 
 ## Linked agents
 
-A channel can be linked to an [agent](../concepts/agents.md) ([ADR](../adrs/channels-and-connectors-are-one-connection.md#amendment-2026-10-16-an-agent-linked-to-a-channel)). `GET /api/channels/accounts` lists each channel with its linked agent, and `PUT /api/channels/accounts/:id/agent` links one or unlinks it with `null` ([`channel-accounts.ts`](../../packages/api-types/src/channel-accounts.ts)). Once answering by the linked agent lands, an unlinked channel is silent. Until then nothing answers as the linked agent, and main still answers every conversation.
+A channel can be linked to an [agent](../concepts/agents.md) ([ADR](../adrs/channels-and-connectors-are-one-connection.md#amendment-2026-10-16-an-agent-linked-to-a-channel)). `GET /api/channels/accounts` lists each channel with its linked agent, and `PUT /api/channels/accounts/:id/agent` links one or unlinks it with `null` ([`channel-accounts.ts`](../../packages/api-types/src/channel-accounts.ts)). The linked agent answers in the channel's conversations.
 
 ### Invariants
 
@@ -49,6 +49,9 @@ A channel can be linked to an [agent](../concepts/agents.md) ([ADR](../adrs/chan
 - On one platform, an agent other than main is linked to at most one channel. Linking it to a second channel on that platform moves the link and leaves the first channel unlinked, in one transaction, and a partial unique index rejects any write that would leave it on two. Main is exempt: it answers a Telegram bot and the signed-in Telegram user at once.
 - A linkable service's first channel, the one carrying the service's name, is linked to main when a Connection comes to back it, so a guardian's first bot keeps answering. A later channel starts unlinked. On upgrade, every backed channel of a linkable service is linked to main.
 - A channel whose Connection is removed loses its link, and a channel no Connection backs cannot be linked.
+- A message on a linked channel is answered by the conversation's agent override if one is set, and otherwise by the channel's linked agent. The conversation never stores the linked agent, so a relink takes effect on the next message and the new agent continues the conversation's history.
+- A channel that can be linked but has no linked agent answers nothing, `/stop` included, and nothing falls back to main. A channel whose linked agent is not loaded answers nothing either, and Rome logs a warning once per channel and agent.
+- A channel of a service that takes no link, such as webchat, email or the Cloud `agents` channel, is answered by main.
 - People and [account pairing](#account-pairing) key an account by its service, not by its channel. An address on a service's second channel resolves to the same person as on its first when the platform gives that person one address across bots. Telegram and Discord do. Feishu does not: its sender id is issued per app, so a guardian is paired again on a second Feishu bot.
 
 ## Connection setup

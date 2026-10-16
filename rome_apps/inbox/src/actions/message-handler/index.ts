@@ -1,4 +1,4 @@
-import { createAppLogger, getCurrentActionContext } from "@rome-os/app-runtime";
+import { createAppLogger, getCurrentActionContext, isCoreMainAgentId } from "@rome-os/app-runtime";
 import type {
   Action,
   ActionConfig,
@@ -322,6 +322,33 @@ async function resolveRequestedAgent(
   }
 }
 
+/**
+ * The agent that answers on an account linked to `linkedAgent`: main for
+ * `core:main`, the linked agent while it is loaded, and null when it is not,
+ * which leaves the account silent. The host passes no agent it knows is not
+ * loaded, so a null here means the agent was unloaded since.
+ */
+async function resolveLinkedAgent(
+  deps: MessageHandlerRuntimeDeps,
+  channel: string,
+  linkedAgent: string,
+): Promise<string | null> {
+  if (isCoreMainAgentId(linkedAgent)) return "main";
+  try {
+    if ((await deps.agentRunner.hasAgent?.(linkedAgent)) === false) {
+      log.warn("linked agent is not loaded; the account stays silent", { channel, linkedAgent });
+      return null;
+    }
+  } catch (err) {
+    log.warn("hasAgent check failed; honoring linked agent", {
+      channel,
+      linkedAgent,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return linkedAgent;
+}
+
 // ---------------------------------------------------------------------------
 // Trusted path: main agent -> envoy check -> send / approval gate
 // ---------------------------------------------------------------------------
@@ -598,6 +625,17 @@ export function createMessageHandlerAction(
       try {
         log.info("message received", { channel, channelUserId, displayName });
 
+        const linkedAgent =
+          typeof args.linkedAgentName === "string" && args.linkedAgentName.trim()
+            ? args.linkedAgentName.trim()
+            : undefined;
+        const answeringAgent = linkedAgent
+          ? await resolveLinkedAgent(deps, channel, linkedAgent)
+          : "main";
+        if (answeringAgent === null) {
+          return { status: "ok", data: { action: "silent" } };
+        }
+
         // Only a link resolves a sender (docs/concepts/people.md#link). The
         // display name is whatever the sender typed, so an unlinked account
         // stays a stranger until the guardian links or pairs it, even when
@@ -644,9 +682,11 @@ export function createMessageHandlerAction(
           projectName: selectedProjectName,
           projectPath: selectedProjectPath,
         });
-        // Root conversations retain their persisted binding. Native thread
-        // sessions are refreshed by the repository from their parent binding.
-        const targetAgent = conversation.agentName ?? "main";
+        // Root conversations retain their persisted override. Native thread
+        // sessions are refreshed by the repository from their parent's. The
+        // linked agent is never stored, so a relink takes effect on the next
+        // message.
+        const targetAgent = conversation.agentName ?? answeringAgent;
         const platformMessageId =
           typeof args.messageId === "string" && args.messageId
             ? args.messageId

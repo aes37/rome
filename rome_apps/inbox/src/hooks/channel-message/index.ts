@@ -90,6 +90,17 @@ export class ChannelMessageHook implements ChannelMessageHookInterface {
       return;
     }
 
+    // Read per message, since a relink changes it on the same channel. An
+    // account with no linked agent answers nothing, not even `/stop`.
+    const linkedAgent = channel.linkedAgent;
+    if (linkedAgent === null) {
+      log.debug("account has no linked agent; not answering", {
+        service,
+        messageId: message.messageId,
+      });
+      return;
+    }
+
     // A program sends on `agents`, not a person, so `/stop` there is text for
     // the model, and `message_handler` decides whether Rome answers it.
     if (service !== AGENTS_CHANNEL && isStopCommand(message.text)) {
@@ -170,7 +181,10 @@ export class ChannelMessageHook implements ChannelMessageHookInterface {
         });
         return null;
       });
-    void this.runTurn(message, service, connectionId, attachments, routedAgentName, activity);
+    void this.runTurn(message, service, connectionId, attachments, activity, {
+      routedAgentName,
+      linkedAgentName: linkedAgent,
+    });
   }
 
   private async runTurn(
@@ -178,8 +192,8 @@ export class ChannelMessageHook implements ChannelMessageHookInterface {
     service: string,
     connectionId: string,
     attachments: InboundEvent["message"]["attachments"],
-    routedAgentName: string | undefined,
     activity: Promise<ChannelActivitySession | null>,
+    agents: { routedAgentName: string | undefined; linkedAgentName: string | undefined },
   ): Promise<void> {
     const slowTurnMs = this.options.slowTurnMs ?? SLOW_TURN_MS;
     const slow = setTimeout(() => {
@@ -207,7 +221,7 @@ export class ChannelMessageHook implements ChannelMessageHookInterface {
           attachments,
           messageId: message.messageId,
           replyTo: message.replyTo,
-          routedAgentName,
+          ...agents,
         },
         {
           initiator: `connection:${connectionId}`,
