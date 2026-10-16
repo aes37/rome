@@ -135,11 +135,14 @@ describe("Recent zone, expanded sidebar", () => {
     expect(within(zone).getAllByRole("link")).toHaveLength(3);
     expect(within(zone).queryByText("Delta")).toBeNull();
 
-    const toggle = within(zone).getByRole("button", { name: "Show more" });
+    // The toggle is the divider closing the zone, so it sits just after the list.
+    const divider = zone.nextElementSibling as HTMLElement;
+    const toggle = within(divider).getByRole("button", { name: "Show more" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     await user.click(toggle);
     expect(within(zone).getAllByRole("link")).toHaveLength(4);
-    expect(within(zone).getByRole("button", { name: "Show less" })).toBeTruthy();
+    expect(within(divider).getByRole("button", { name: "Show less" })).toBeTruthy();
+    expect(toggle.getAttribute("aria-controls")).toBe(zone.id);
 
     first.unmount();
     renderSidebar();
@@ -156,7 +159,8 @@ describe("Recent zone, expanded sidebar", () => {
     renderSidebar();
 
     const zone = await screen.findByRole("navigation", { name: "Recent apps" });
-    expect(within(zone).queryByRole("button", { name: "Show more" })).toBeNull();
+    // The zone still closes on a divider, just one with nothing to drop open.
+    expect(within(zone.nextElementSibling as HTMLElement).queryByRole("button")).toBeNull();
   });
 
   it("pins from the row button: the app moves to the pinned list and leaves Recent", async () => {
