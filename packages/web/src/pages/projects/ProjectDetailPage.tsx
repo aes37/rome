@@ -14,10 +14,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDocumentTitle } from "@/hooks/use-document-title";
 import { filesHrefForProject, useChatProjects } from "@/hooks/use-chat-projects";
+import { activityTime } from "./activity-time";
 import type { ResolveResult } from "@/components/file-browser/store/types";
 import type { FileBrowserTreeNode } from "@/lib/file-browser-tree";
 import { fetchJson } from "@/lib/fetch-json";
-import { relativeTime } from "@/lib/routine-language";
 import {
   Page,
   PageActions,
@@ -71,7 +71,7 @@ function useProjectPathKind(path: string, enabled: boolean) {
 // One project: its chats, newest first, with a way to start another in its
 // folder, beside the folder's top-level files.
 export default function ProjectDetailPage() {
-  const { t } = useTranslation("common");
+  const { t, i18n } = useTranslation("common");
   const navigate = useNavigate();
   const location = useLocation();
   const { projectPath = "" } = useParams<{ projectPath: string }>();
@@ -196,7 +196,7 @@ export default function ProjectDetailPage() {
                   <Link to={`/chat/${encodeURIComponent(chat.id)}`} className={CHAT_ROW_CLASS}>
                     <span className="min-w-0 flex-1 truncate">{chat.name}</span>
                     <span className="shrink-0 text-aux text-subtle-foreground">
-                      {relativeTime(chat.activityAt)}
+                      {activityTime(chat.activityAt, i18n.language)}
                     </span>
                   </Link>
                 </li>

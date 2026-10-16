@@ -20,7 +20,7 @@ import {
   useChatProjects,
   type ChatProject,
 } from "@/hooks/use-chat-projects";
-import { relativeTime } from "@/lib/routine-language";
+import { activityTime } from "./activity-time";
 import { ListCollection, ListGrid, ListToolbar } from "@rome-os/ui/layout-list";
 import {
   Page,
@@ -40,7 +40,7 @@ function parseProjectName(value: string): string | null {
 }
 
 function ProjectCard({ project }: { project: ChatProject }) {
-  const { t } = useTranslation("common");
+  const { t, i18n } = useTranslation("common");
   const latest = project.chats[0];
   return (
     <Link
@@ -59,7 +59,7 @@ function ProjectCard({ project }: { project: ChatProject }) {
       <p className="mt-auto text-aux text-subtle-foreground">
         {t("projectsPage.chatCount", { count: project.chats.length })}
         {project.activityAt
-          ? ` · ${t("projectsPage.updated", { when: relativeTime(project.activityAt) })}`
+          ? ` · ${t("projectsPage.updated", { when: activityTime(project.activityAt, i18n.language) })}`
           : null}
       </p>
     </Link>
@@ -78,12 +78,16 @@ export default function ProjectsIndexPage() {
   // The dialog stays open until the POST answers; a second Enter or click in
   // that window would ask core to create the same project again.
   const submitting = useRef(false);
+  // Bumped on every close, so a create that answers after Cancel doesn't
+  // carry the guardian into the project they backed out of.
+  const dialogSession = useRef(0);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visible =
     projects?.filter((project) => project.name.toLowerCase().includes(normalizedQuery)) ?? null;
 
   const closeCreate = () => {
+    dialogSession.current += 1;
     setCreating(false);
     setCreateError(null);
   };
@@ -100,11 +104,14 @@ export default function ProjectsIndexPage() {
     }
     if (submitting.current) return;
     submitting.current = true;
+    setCreateError(null);
+    const session = dialogSession.current;
     try {
       const path = await createChatProject(name);
-      closeCreate();
+      const cancelled = session !== dialogSession.current;
+      if (!cancelled) closeCreate();
       await invalidate();
-      navigate(projectHref(path));
+      if (!cancelled) navigate(projectHref(path));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("projectsPage.createFailed"));
     } finally {

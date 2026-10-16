@@ -112,6 +112,13 @@ function LocationProbe() {
   );
 }
 
+// The dialog selects its field a frame after it opens, so typing before then
+// would lose the first characters to that selection.
+async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "New project" }));
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
 function renderAt(path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -176,7 +183,7 @@ describe("Projects list", () => {
     const user = userEvent.setup();
     renderAt("/projects");
 
-    await user.click(await screen.findByRole("button", { name: "New project" }));
+    await openCreateDialog(user);
     await user.type(screen.getByLabelText("Project name"), "launch-plan");
     await user.click(screen.getByRole("button", { name: "Create project" }));
 
@@ -197,7 +204,7 @@ describe("Projects list", () => {
     const user = userEvent.setup();
     renderAt("/projects");
 
-    await user.click(await screen.findByRole("button", { name: "New project" }));
+    await openCreateDialog(user);
     await user.type(screen.getByLabelText("Project name"), "launch-plan");
     await user.click(screen.getByRole("button", { name: "Create project" }));
     await user.click(screen.getByRole("button", { name: "Create project" }));
@@ -217,6 +224,85 @@ describe("Projects list", () => {
     expect(screen.getByText("beta")).toBeTruthy();
     expect(screen.queryByText("alpha")).toBeNull();
   });
+
+  it("names a chat-only project in a subfolder by its whole path", async () => {
+    sessions = [
+      chat("s1", "Assets one", "alpha/assets", "2026-07-03T00:00:00.000Z"),
+      chat("s2", "Assets two", "beta/assets", "2026-07-02T00:00:00.000Z"),
+    ];
+    renderAt("/projects");
+
+    expect(await screen.findByText("alpha/assets")).toBeTruthy();
+    expect(screen.getByText("beta/assets")).toBeTruthy();
+  });
+
+  it("says when a project was updated in the dashboard's language", async () => {
+    await i18n.changeLanguage("zh-CN");
+    try {
+      renderAt("/projects");
+
+      const alpha = (await screen.findAllByRole("link"))[0];
+      const updated = new Date("2026-07-09T00:00:00.000Z").toLocaleDateString("zh-CN", {
+        month: "short",
+        day: "numeric",
+      });
+      expect(within(alpha).getByText(new RegExp(`${updated}更新`))).toBeTruthy();
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  });
+
+  it("clears an earlier name error once a valid name is sent", async () => {
+    let openGate = () => {};
+    createGate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+    const user = userEvent.setup();
+    renderAt("/projects");
+
+    await openCreateDialog(user);
+    await user.type(screen.getByLabelText("Project name"), ".hidden");
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+    const invalid = "Use a name without slashes that doesn't start with a dot.";
+    expect(screen.getByText(invalid)).toBeTruthy();
+
+    await user.clear(screen.getByLabelText("Project name"));
+    await user.type(screen.getByLabelText("Project name"), "launch-plan");
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+
+    expect(screen.queryByText(invalid)).toBeNull();
+    openGate();
+    await screen.findByText(/"pathname":"\/projects\/launch-plan"/);
+  });
+
+  it("stays on the list when the dialog is cancelled while the project is created", async () => {
+    let openGate = () => {};
+    createGate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+    const user = userEvent.setup();
+    renderAt("/projects");
+
+    await openCreateDialog(user);
+    await user.type(screen.getByLabelText("Project name"), "launch-plan");
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    const listLoads = () =>
+      fetchMock.mock.calls.filter(
+        ([input, init]) =>
+          new URL(String(input), "http://localhost").pathname === "/api/chat/projects" &&
+          init?.method !== "POST",
+      ).length;
+    const before = listLoads();
+    openGate();
+
+    // The list reloads with the new project, and the page stays put.
+    await rs.waitFor(() => expect(listLoads()).toBeGreaterThan(before));
+    expect(JSON.parse(screen.getByTestId("location").textContent ?? "{}").pathname).toBe(
+      "/projects",
+    );
+    expect(createdProjects).toEqual(["launch-plan"]);
+  });
 });
 
 describe("Project page", () => {
@@ -234,6 +320,23 @@ describe("Project page", () => {
     expect(within(files).getByRole("link", { name: "Open in Files" }).getAttribute("href")).toBe(
       "/files/alpha",
     );
+  });
+
+  it("says when each chat was last active in the dashboard's language", async () => {
+    await i18n.changeLanguage("zh-CN");
+    try {
+      renderAt("/projects/alpha");
+
+      const chats = await screen.findByRole("region", { name: "对话" });
+      const newest = (await within(chats).findAllByRole("link"))[0];
+      const when = new Date("2026-07-09T00:00:00.000Z").toLocaleDateString("zh-CN", {
+        month: "short",
+        day: "numeric",
+      });
+      expect(within(newest).getByText(when)).toBeTruthy();
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 
   it("starts a new chat in the project's folder", async () => {

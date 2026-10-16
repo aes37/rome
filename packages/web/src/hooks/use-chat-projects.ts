@@ -24,10 +24,6 @@ export interface ChatProject {
 
 const CHAT_PROJECTS_QUERY_KEY = ["chat-projects"] as const;
 
-export function projectNameFromPath(path: string): string {
-  return path.split("/").filter(Boolean).at(-1) ?? path;
-}
-
 /** The project a chat belongs to. A chat with no folder runs in `default`. */
 export function projectPathForChat(chat: {
   projectPath?: string | null;
@@ -73,7 +69,10 @@ async function loadChatProjects(): Promise<ChatProject[]> {
       chats.sort((a, b) => sessionActivityTime(b) - sessionActivityTime(a));
       return {
         path,
-        name: names.get(path) ?? projectNameFromPath(path),
+        // Without a record's name, the whole path: a chat started in a
+        // subfolder such as `website-redesign/assets` must not pass for a
+        // project called `assets`.
+        name: names.get(path) ?? path,
         chats,
         activityAt: chats[0]?.activityAt ?? null,
       };
