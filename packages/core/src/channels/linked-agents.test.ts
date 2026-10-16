@@ -3,9 +3,10 @@ import type { ChannelRecord } from "../db/repositories/channel-records.js";
 import { linkedAgentResolver } from "./linked-agents.js";
 
 const warn = rs.hoisted(() => rs.fn());
+const info = rs.hoisted(() => rs.fn());
 
 rs.mock("../logger.js", () => ({
-  createLogger: () => ({ debug: rs.fn(), info: rs.fn(), warn, error: rs.fn() }),
+  createLogger: () => ({ debug: rs.fn(), info, warn, error: rs.fn() }),
 }));
 
 describe("linkedAgentResolver", () => {
@@ -26,6 +27,7 @@ describe("linkedAgentResolver", () => {
     loaded = new Set(["sales:agent", "support:agent"]);
     records = new Map();
     warn.mockClear();
+    info.mockClear();
   });
 
   const link = (id: string, service: string) =>
@@ -59,6 +61,24 @@ describe("linkedAgentResolver", () => {
 
   it("reads null for a linkable channel no record names", () => {
     expect(linkedAgentResolver(repository, agents)("telegram")).toBeNull();
+  });
+
+  it("logs an account with no linked agent once, until it is linked", () => {
+    link("feishu-2", "feishu");
+    agent = null;
+    const linkedAgentOf = linkedAgentResolver(repository, agents);
+
+    expect(linkedAgentOf("feishu-2")).toBeNull();
+    expect(linkedAgentOf("feishu-2")).toBeNull();
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(expect.any(String), { channel: "feishu-2" });
+
+    agent = "sales:agent";
+    expect(linkedAgentOf("feishu-2")).toBe("sales:agent");
+    agent = null;
+    expect(linkedAgentOf("feishu-2")).toBeNull();
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("reads null while the linked agent is not loaded, and warns once until it loads", () => {
