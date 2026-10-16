@@ -14,7 +14,6 @@ describe("linkedAgentResolver", () => {
   let loaded: Set<string>;
   let records: Map<string, { service: string; agent: string | null }>;
   const repository = {
-    serviceOf: (id: string) => records.get(id)?.service ?? id,
     byId: (id: string) => {
       const record = records.get(id);
       return record ? ({ id, ...record } as unknown as ChannelRecord) : null;

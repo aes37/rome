@@ -319,10 +319,9 @@ async function resolveAgent<F extends string | null>(
   if (isCoreMainAgentId(requested)) return "main";
   try {
     if ((await deps.agentRunner.hasAgent?.(requested)) === false) {
-      // Falling back to main is routine after an app is removed, so only a
-      // linked agent unloaded since the host checked it is worth a warning.
-      if (fallback === null) log.warn("linked agent is not loaded", { agent: requested });
-      else log.debug("agent is not loaded", { agent: requested, fallback });
+      // Core already warns, once per channel, for a linked agent that is not
+      // loaded, and falling back to main is routine after an app is removed.
+      log.debug("agent is not loaded", { agent: requested, fallback });
       return fallback;
     }
   } catch (err) {
