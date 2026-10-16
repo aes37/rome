@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "@rstest/core";
 import { channels } from "../schema.js";
 import { createTestDb, type TestDb } from "../../test/helpers.js";
 import {
+  ChannelNotLinkable,
   ChannelRecordNotFound,
   ChannelRecordsRepository,
   ChannelUnbacked,
@@ -157,6 +158,15 @@ describe("ChannelRecordsRepository", () => {
 
     expect(() => records.link("nope", "sales:agent")).toThrow(ChannelRecordNotFound);
     expect(() => records.link("feishu", "sales:agent")).toThrow(ChannelUnbacked);
+  });
+
+  it("refuses a link to a channel whose service takes none, and unlinks it", () => {
+    const records = repository();
+    const db = testDb!.db;
+    records.claim(db, { id: "c1", service: "agents" }, NOW);
+
+    expect(() => records.link("agents", "sales:agent")).toThrow(ChannelNotLinkable);
+    expect(records.link("agents", null).channel.agent).toBeNull();
   });
 
   it("rejects a direct write that links one agent twice on a platform", () => {

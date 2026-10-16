@@ -46,7 +46,7 @@ A channel can be linked to an [agent](../concepts/agents.md) ([ADR](../adrs/chan
 
 - A channel has at most one linked agent, stored by its canonical id. Main is never linked, since it answers wherever no agent is.
 - Only a channel of a Feishu, Telegram, or Discord bot, or of the signed-in Telegram user, can be linked ([`linked-agents.ts`](../../packages/api-types/src/linked-agents.ts)). A channel that carries Rome's own traffic, such as the Cloud `agents` channel, stays with main.
-- On one platform, an agent is linked to at most one channel. A database constraint enforces it, not a check before the write. Linking an agent to a second channel on that platform moves the link and leaves the first channel unlinked, in one transaction.
+- On one platform, an agent is linked to at most one channel. Linking an agent to a second channel on that platform moves the link and leaves the first channel unlinked, in one transaction, and a partial unique index rejects any write that would leave it on two.
 - A channel whose Connection is removed loses its link, and a channel no Connection backs cannot be linked.
 - People and [account pairing](#account-pairing) key an account by its service, not by its channel. An address on a service's second channel resolves to the same person as on its first when the platform gives that person one address across bots. Telegram and Discord do. Feishu does not: its sender id is issued per app, so a guardian is paired again on a second Feishu bot.
 

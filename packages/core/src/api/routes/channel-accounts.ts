@@ -7,10 +7,11 @@ import type {
   LinkAccountAgentRequest,
   LinkAccountAgentResult,
 } from "@rome/api-types/channel-accounts";
-import { isMainAgent, LINKABLE_SERVICES } from "@rome/api-types/linked-agents";
+import { isMainAgent } from "@rome/api-types/linked-agents";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  ChannelNotLinkable,
   ChannelRecordNotFound,
   ChannelRecordsRepository,
   ChannelUnbacked,
@@ -55,19 +56,17 @@ export function channelAccountsRoutes(deps: Pick<ApiDeps, "db" | "agentLoader">)
     }
     let agent = parsed.data.agent;
     if (agent !== null) {
-      if (isMainAgent(agent)) {
-        return c.json({ error: "Main answers wherever no agent is linked. Unlink instead." }, 400);
-      }
       if (!deps.agentLoader.has(agent)) {
         return c.json({ error: `Agent "${agent}" is not loaded.` }, 400);
       }
-      agent = deps.agentLoader.getCanonicalName(agent);
+      // Checked on the canonical id too, so an alias of main is refused.
+      const canonical = deps.agentLoader.getCanonicalName(agent);
+      if (isMainAgent(agent) || isMainAgent(canonical)) {
+        return c.json({ error: "Main answers wherever no agent is linked. Unlink instead." }, 400);
+      }
+      agent = canonical;
     }
     const id = c.req.param("id");
-    const record = channels.byId(id);
-    if (agent !== null && record && !LINKABLE_SERVICES.has(record.service)) {
-      return c.json({ error: `A ${record.service} account cannot be linked to an agent.` }, 400);
-    }
     try {
       const outcome = channels.link(id, agent);
       const result: LinkAccountAgentResult = {
@@ -78,6 +77,7 @@ export function channelAccountsRoutes(deps: Pick<ApiDeps, "db" | "agentLoader">)
     } catch (err) {
       if (err instanceof ChannelRecordNotFound) return c.json({ error: err.message }, 404);
       if (err instanceof ChannelUnbacked) return c.json({ error: err.message }, 409);
+      if (err instanceof ChannelNotLinkable) return c.json({ error: err.message }, 400);
       throw err;
     }
   });

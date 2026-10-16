@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { LINKABLE_SERVICES } from "@rome/api-types/linked-agents";
 import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
 import { platformOf } from "../../channels/platform.js";
 import { channels } from "../schema.js";
@@ -37,6 +38,17 @@ export class ChannelUnbacked extends Error {
   constructor(readonly channel: string) {
     super(`Channel "${channel}" has no connection, so no agent can be linked to it`);
     this.name = "ChannelUnbacked";
+  }
+}
+
+/** A link asked of a channel whose service takes no linked agent. */
+export class ChannelNotLinkable extends Error {
+  constructor(
+    readonly channel: string,
+    readonly service: string,
+  ) {
+    super(`A ${service} account cannot be linked to an agent`);
+    this.name = "ChannelNotLinkable";
   }
 }
 
@@ -170,12 +182,16 @@ export class ChannelRecordsRepository {
    * Link `agent` to channel `id`, or unlink it with null. On one platform an
    * agent is linked to at most one channel, so linking it here unlinks it from
    * any other channel on this platform, in the same transaction. The partial
-   * unique index rejects any write that would break the rule anyway.
+   * unique index rejects any write that would break the rule anyway. Only a
+   * channel of a linkable service takes a link; unlinking is always open.
    */
   link(id: string, agent: string | null): LinkOutcome {
     return this.db.transaction((tx) => {
       const row = tx.select().from(channels).where(eq(channels.id, id)).get();
       if (!row) throw new ChannelRecordNotFound(id);
+      if (agent !== null && !LINKABLE_SERVICES.has(row.service)) {
+        throw new ChannelNotLinkable(id, row.service);
+      }
       if (agent !== null && row.connectionId === null) throw new ChannelUnbacked(id);
       let unlinkedFrom: string | null = null;
       if (agent !== null) {

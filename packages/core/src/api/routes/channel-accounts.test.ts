@@ -109,6 +109,14 @@ describe("channel account routes", () => {
     expect(records.byId("feishu")?.agent).toBeNull();
   });
 
+  it("refuses a name that resolves to main", async () => {
+    const { records, link, db } = setup({ assistant: "core:main" });
+    records.claim(db, { id: "c1", service: "feishu" }, NOW);
+
+    expect((await link("feishu", "assistant")).status).toBe(400);
+    expect(records.byId("feishu")?.agent).toBeNull();
+  });
+
   it("refuses to link an account of a service that is not linkable", async () => {
     const { records, link, db } = setup();
     records.claim(db, { id: "c1", service: "agents" }, NOW);
