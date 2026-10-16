@@ -123,7 +123,6 @@ describe("GET /connections", () => {
       connect: null,
       setups: {},
       channel: null,
-      linkedAgent: null,
       severalAccounts: false,
     });
 
@@ -218,7 +217,6 @@ describe("GET /connections", () => {
       connect: null,
       setups: {},
       channel: null,
-      linkedAgent: null,
       severalAccounts: false,
     });
   });
@@ -505,6 +503,36 @@ describe("POST /connections", () => {
       channel: "telegram",
       linkedAgent: "sales:agent",
     });
+
+    records.link("telegram", null);
+    const relisted = await (
+      await makeApp(registry, undefined, { db }).request("/connections")
+    ).json();
+    expect(
+      relisted.connections.find((each: { id: string }) => each.id === conn.id).linkedAgent,
+    ).toBeNull();
+  });
+
+  it("reports no linked agent for a service that takes no link", async () => {
+    const { db, close } = createTestDb();
+    openDbs.push(close);
+    const records = new ChannelRecordsRepository(db);
+    const registry = new ConnectionRegistry({
+      ledger: new DrizzleGrantLedger(db),
+      onMint: (tx, record) => {
+        records.claim(tx, record, record.createdAt);
+      },
+    });
+    registry.register({ ...telegram.descriptor, service: "whatsapp" });
+    const conn = await registry.connect("whatsapp");
+
+    const { connections } = await (
+      await makeApp(registry, undefined, { db }).request("/connections")
+    ).json();
+
+    const listed = connections.find((each: { id: string }) => each.id === conn.id);
+    expect(listed.channel).toBe("whatsapp");
+    expect("linkedAgent" in listed).toBe(false);
   });
 
   it("hands back an account whose setup never finished instead of minting", async () => {
