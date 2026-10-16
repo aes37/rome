@@ -4,12 +4,15 @@ import type {
   TurnMiddlewareHook,
   TurnMiddlewareHookDeps,
   TurnMiddlewareNext,
+  TurnOutcome,
 } from "@rome-os/app-runtime";
 import { createProgressRepository } from "../../db/repositories/progress.js";
 import {
   finishAfterBuild,
+  isBuilderAgent,
   isOnboardingBuildTurn,
   runTurn,
+  startBuild,
   type TurnReply,
   type WelcomeEffects,
 } from "./script.js";
@@ -77,9 +80,9 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
 
   async handle(ctx: TurnMiddlewareContext, next: TurnMiddlewareNext): Promise<void> {
     if (ctx.session.agentName !== `${this.deps.appId}:${AGENT_NAME}`) {
-      const isBuild = await this.isBuildTurn(ctx);
-      await next();
-      if (isBuild) await this.postClosingMessage(ctx);
+      const isBuild = await this.claimBuildTurn(ctx);
+      const outcome = await next();
+      if (isBuild) await this.postClosingMessage(ctx, outcome);
       return;
     }
 
@@ -107,10 +110,12 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
    *  - `connect_ai`: an optional lead-in + the host's built-in AI tools card.
    *  - `handoff`: an optional lead-in, then the floor passes to another agent in
    *    this same chat.
+   *  - `none`: nothing; core closes the turn with an empty result.
    *  A parked turn emits NO terminal `result` — the card's result arrives as
    *  the next turn. */
   private async emitReply(ctx: TurnMiddlewareContext, reply: TurnReply): Promise<void> {
     const emit = (event: AgentMessage) => ctx.emit(event);
+    if (reply.kind === "none") return;
     if (reply.kind === "text") {
       await typeOut(emit, reply.text, "final");
       ctx.emit({ type: "result", content: reply.text });
@@ -131,25 +136,38 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
     }
   }
 
-  /** Whether this turn is the build of the guardian's first app. A failed
-   *  check reads as no, so ordinary chat never depends on the welcome's state. */
-  private async isBuildTurn(ctx: TurnMiddlewareContext): Promise<boolean> {
+  /** Whether this turn belongs to the build of the guardian's first app, and
+   *  on the build's first turn, record its chat. Every agent's turns pass
+   *  through here, so anything but the builder returns before any read. A
+   *  failed check reads as no, so ordinary chat never depends on the welcome. */
+  private async claimBuildTurn(ctx: TurnMiddlewareContext): Promise<boolean> {
+    if (!isBuilderAgent(ctx.session.agentName)) return false;
     const db = this.deps.appContext?.db;
     if (!db) return false;
     try {
-      return isOnboardingBuildTurn(createProgressRepository(db).get(), await this.getLocale(), {
+      const progress = createProgressRepository(db);
+      const current = progress.get();
+      if (current.node !== "building") return false;
+      const turn = {
         agentName: ctx.session.agentName,
+        sessionId: ctx.session.id,
         prompt: ctx.input.prompt ?? "",
-      });
+      };
+      if (!isOnboardingBuildTurn(current, await this.getLocale(), turn)) return false;
+      startBuild(progress, ctx.session.id);
+      return true;
     } catch {
       return false;
     }
   }
 
-  /** Post the welcome's closing message as its own message after the build
-   *  turn. A turn's stream ends with its reply, so the message goes through
-   *  the chat's channel instead. */
-  private async postClosingMessage(ctx: TurnMiddlewareContext): Promise<void> {
+  /** After a build turn, post the welcome's closing message as its own
+   *  message, once the build has finished. A turn's stream ends with its
+   *  reply, so the message goes through the chat's channel instead. */
+  private async postClosingMessage(
+    ctx: TurnMiddlewareContext,
+    outcome: TurnOutcome,
+  ): Promise<void> {
     const appContext = this.deps.appContext;
     if (!appContext?.db) return;
     const threadId = ctx.session.channelThreadKey.replace(/^webchat:/, "");
@@ -157,16 +175,19 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
       const text = finishAfterBuild(
         createProgressRepository(appContext.db),
         await this.getLocale(),
+        ctx.session.id,
+        outcome,
       );
-      const outcome = await appContext.runAction("send_message", {
+      if (!text) return;
+      const sent = await appContext.runAction("send_message", {
         channel: "webchat",
         threadId,
         text,
       });
-      if (outcome.status !== "ok") {
+      if (sent.status !== "ok") {
         this.deps.logger.warn("welcome-to-rome could not post the closing message", {
           sessionId: ctx.session.id,
-          status: outcome.status,
+          status: sent.status,
         });
       }
     } catch (err) {

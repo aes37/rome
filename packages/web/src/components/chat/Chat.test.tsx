@@ -26,6 +26,7 @@ import {
 
 const t = (key: string) => key;
 const mockUseSessionIdentity = rs.hoisted(() => rs.fn());
+const mockInvalidateSettings = rs.hoisted(() => rs.fn());
 const appsPanel = rs.hoisted(() => ({ collapsed: true, setCollapsed: rs.fn() }));
 const mockFindActiveSubmission = rs.hoisted(() => rs.fn(() => null));
 const mockUseChatTabStatus = rs.hoisted(() => rs.fn());
@@ -36,6 +37,10 @@ rs.mock("@/hooks/use-tab-status", () => ({
 
 rs.mock("react-i18next", () => ({
   useTranslation: () => ({ t }),
+}));
+
+rs.mock("@/hooks/use-settings", () => ({
+  useInvalidateSettings: () => mockInvalidateSettings,
 }));
 
 rs.mock("@/components/chat/use-session-identity", () => ({
@@ -568,6 +573,49 @@ describe("Chat turn stream lifecycle", () => {
     await user.click(within(dialog).getByRole("button", { name: "navbar.delete" }));
 
     await waitFor(() => expect(deleteSession).toHaveBeenCalledWith("session-1"));
+  });
+
+  it.each([
+    ["refreshes", true],
+    ["leaves", false],
+  ])("%s the cached names when a turn ends, by whether the agent speaks as the main agent", async (_label, presentsAsMain) => {
+    // Onboarding renames the main agent during a turn, and messages are
+    // labelled with the cached name.
+    mockUseSessionIdentity.mockReturnValue({
+      sessionName: null,
+      pinnedAgentMention: null,
+      archivedAt: null,
+      presentsAsMain,
+    });
+    rs.mocked(listSessionTurns)
+      .mockResolvedValueOnce([{ turnId: "turn-1", status: "running" }])
+      .mockResolvedValue([]);
+    rs.mocked(openTurnStream).mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode('event: done\ndata: {"success":true}\n\n'),
+              );
+              controller.close();
+            },
+          }),
+        ),
+      ),
+    );
+    renderChat(<Chat sessionId="session-1" />);
+    const composer = () => screen.getByTestId("chat-composer").getAttribute("data-streaming");
+
+    await waitFor(() => expect(openTurnStream).toHaveBeenCalled());
+    await waitFor(() => expect(composer()).toBe("false"));
+
+    if (presentsAsMain) {
+      await waitFor(() => expect(mockInvalidateSettings).toHaveBeenCalled());
+    } else {
+      expect(mockInvalidateSettings).not.toHaveBeenCalled();
+    }
+    rs.mocked(listSessionTurns).mockResolvedValue([{ turnId: "turn-1", status: "running" }]);
   });
 
   it("aborts an attached turn stream when the chat unmounts", async () => {

@@ -12,6 +12,7 @@
 // idea list instead of summoning. The middleware (index.ts) turns each reply
 // into events; this file owns *what to show / ask, and when*.
 
+import type { TurnOutcome } from "@rome-os/app-runtime";
 import { copyFor, type WelcomeCopy } from "./copy.js";
 import type {
   AppIdea,
@@ -44,7 +45,9 @@ export type TurnReply =
   | { kind: "connect_ai"; lead?: string }
   // Pass the floor to `agentName` in this chat, opening with `brief`. The
   // handoff's end returns next turn.
-  | { kind: "handoff"; lead?: string; agentName: string; agentLabel: string; brief: string };
+  | { kind: "handoff"; lead?: string; agentName: string; agentLabel: string; brief: string }
+  // Nothing to say, such as the end of a handoff after the welcome has closed.
+  | { kind: "none" };
 
 /** Result of summoning a specialist agent inline (blocking). */
 export interface SummonResult {
@@ -181,6 +184,7 @@ const FRESH_PROGRESS = {
   appIdeas: null,
   appIdeasGeneratedAt: null,
   aiConnected: null,
+  buildSessionId: null,
   completedAt: null,
 } as const;
 
@@ -190,34 +194,58 @@ function field(userText: string, key: string): string | null {
   return typeof v === "string" ? v : null;
 }
 
+/** Whether `agentName` is the agent that builds the first app. */
+export function isBuilderAgent(agentName: string): boolean {
+  return agentName === BUILDER_AGENT;
+}
+
 /**
- * Run one user turn through the state machine. Returns what the turn should emit;
- * the caller (index.ts) turns it into events.
- */
-/**
- * Whether a turn is the onboarding build: the builder's turn while onboarding
- * waits on the build, with one of the offered ideas' kickoff prompts in its
- * prompt. The handoff seeds that prompt as the build's first turn.
+ * Whether a turn belongs to the onboarding build while onboarding waits on it.
+ * The build's first turn carries one of the offered ideas' kickoff prompts,
+ * which the handoff seeds. Once that turn starts, its chat is the build chat,
+ * and every later turn there belongs to the build too.
  */
 export function isOnboardingBuildTurn(
   progress: WelcomeProgress,
   locale: WelcomeLocale,
-  turn: { agentName: string; prompt: string },
+  turn: { agentName: string; sessionId: string; prompt: string },
 ): boolean {
-  if (turn.agentName !== BUILDER_AGENT || progress.node !== "building") return false;
+  if (!isBuilderAgent(turn.agentName) || progress.node !== "building") return false;
+  if (progress.buildSessionId) return progress.buildSessionId === turn.sessionId;
   const ideas = progress.ideas.length > 0 ? progress.ideas : genericIdeas(locale);
   return ideas.some(
     (idea) => idea.prompt.trim() !== "" && turn.prompt.includes(idea.prompt.trim()),
   );
 }
 
-/** End onboarding once the build turn has finished, and return the closing
- *  message to post after it. */
-export function finishAfterBuild(progress: ProgressRepository, locale: WelcomeLocale): string {
+/** Record the chat that builds the first app, on the build's first turn. */
+export function startBuild(progress: ProgressRepository, sessionId: string): void {
+  if (!progress.get().buildSessionId) progress.patch({ buildSessionId: sessionId });
+}
+
+/**
+ * End onboarding after a turn of the build, and return the closing message to
+ * post. Returns null, and changes nothing, when onboarding no longer waits on
+ * this chat (the guardian closed the handoff or started over) or when the turn
+ * did not finish: it was stopped, it failed, or it is parked on a card.
+ */
+export function finishAfterBuild(
+  progress: ProgressRepository,
+  locale: WelcomeLocale,
+  sessionId: string,
+  outcome: TurnOutcome,
+): string | null {
+  const current = progress.get();
+  if (current.node !== "building" || current.buildSessionId !== sessionId) return null;
+  if (outcome.status !== "completed" || outcome.suspended) return null;
   progress.patch({ node: "done", completedAt: new Date().toISOString() });
   return copyFor(locale).finishedAfterBuild;
 }
 
+/**
+ * Run one user turn through the state machine. Returns what the turn should emit;
+ * the caller (index.ts) turns it into events.
+ */
 export async function runTurn(userText: string, fx: WelcomeEffects): Promise<TurnReply> {
   const p = fx.progress.get();
   const locale = await fx.getLocale();
@@ -332,6 +360,10 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
       if (isRestart(userText, language.locale)) {
         fx.progress.patch({ node: "await_names", ...FRESH_PROGRESS });
         return namesReply(fx, language);
+      }
+      // The build handoff ending after the closing message has nothing to add.
+      if (isDismissedInteraction(userText) || readResolutionJson(userText)) {
+        return { kind: "none" };
       }
       return { kind: "text", text: language.copy.alreadyDone };
     }

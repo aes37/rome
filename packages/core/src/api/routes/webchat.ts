@@ -2104,7 +2104,9 @@ export function createWebchatRuntime(deps: ApiDeps): { routes: Hono; runtime: We
         name,
         localName: config.name,
         description: config.description,
-        ...(config.presentAsMain ? { presentAsMain: true as const } : {}),
+        // Only an app that ships with Rome may speak as the guardian's own
+        // agent. Any other app's agent keeps its own name and icon.
+        ...(config.presentAsMain && resolved?.firstParty ? { presentAsMain: true as const } : {}),
       });
     }
 

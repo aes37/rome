@@ -31,6 +31,8 @@ export interface WelcomeProgress {
   ideasGeneratedAt: string | null;
   /** Null until the connect-AI step resolves. */
   aiConnected: boolean | null;
+  /** The chat building the first app, once its first turn has started. */
+  buildSessionId: string | null;
   completedAt: string | null;
 }
 
@@ -41,6 +43,7 @@ const EMPTY: WelcomeProgress = {
   ideas: [],
   ideasGeneratedAt: null,
   aiConnected: null,
+  buildSessionId: null,
   completedAt: null,
 };
 
@@ -51,6 +54,7 @@ interface ProgressPatch {
   appIdeas?: string | null;
   appIdeasGeneratedAt?: string | null;
   aiConnected?: boolean | null;
+  buildSessionId?: string | null;
   completedAt?: string | null;
 }
 
@@ -119,6 +123,7 @@ export class ProgressRepository {
       ideas: parseIdeas(row.appIdeas),
       ideasGeneratedAt: row.appIdeasGeneratedAt,
       aiConnected: row.aiConnected ?? null,
+      buildSessionId: row.buildSessionId ?? null,
       completedAt: row.completedAt,
     };
   }
@@ -145,6 +150,10 @@ export class ProgressRepository {
           : (existing?.appIdeasGeneratedAt ?? null),
       aiConnected:
         patch.aiConnected !== undefined ? patch.aiConnected : (existing?.aiConnected ?? null),
+      buildSessionId:
+        patch.buildSessionId !== undefined
+          ? patch.buildSessionId
+          : (existing?.buildSessionId ?? null),
       completedAt:
         patch.completedAt !== undefined ? patch.completedAt : (existing?.completedAt ?? null),
       updatedAt: now,
@@ -167,6 +176,7 @@ export class ProgressRepository {
       ideas: parseIdeas(next.appIdeas),
       ideasGeneratedAt: next.appIdeasGeneratedAt,
       aiConnected: next.aiConnected,
+      buildSessionId: next.buildSessionId,
       completedAt: next.completedAt,
     };
   }
@@ -188,6 +198,7 @@ export class ProgressRepository {
       appIdeas: null,
       appIdeasGeneratedAt: null,
       aiConnected: null,
+      buildSessionId: null,
       completedAt: null,
     });
   }

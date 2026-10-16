@@ -1,5 +1,11 @@
 import { describe, expect, it, rs } from "@rstest/core";
-import { finishAfterBuild, isOnboardingBuildTurn, runTurn, type WelcomeEffects } from "./script.js";
+import {
+  finishAfterBuild,
+  isOnboardingBuildTurn,
+  runTurn,
+  startBuild,
+  type WelcomeEffects,
+} from "./script.js";
 import type { ProgressRepository, WelcomeProgress } from "../../db/repositories/progress.js";
 
 // Drive the state machine with an in-memory progress row and spies for the
@@ -12,6 +18,7 @@ function makeEffects(node: WelcomeProgress["node"], overrides: Partial<WelcomePr
     ideas: [],
     ideasGeneratedAt: null,
     aiConnected: null,
+    buildSessionId: null,
     completedAt: null,
     ...overrides,
   };
@@ -319,10 +326,14 @@ describe("runTurn — done", () => {
     expect(getRow().completedAt).toEqual(expect.any(String));
   });
 
-  it("recognizes the build turn by the picked idea's prompt while the build is pending", () => {
+  it("recognizes the build's first turn by the picked idea's prompt", () => {
     const ideas = [{ title: "Launch tracker", prompt: "Build me a launch tracker." }];
     const { getRow } = makeEffects("building", { ideas });
-    const turn = { agentName: "core:main", prompt: "Build me a launch tracker." };
+    const turn = {
+      agentName: "core:main",
+      sessionId: "build-chat",
+      prompt: "Build me a launch tracker.",
+    };
 
     expect(isOnboardingBuildTurn(getRow(), "en", turn)).toBe(true);
     // Another agent, another prompt, or a finished welcome is ordinary chat.
@@ -335,15 +346,65 @@ describe("runTurn — done", () => {
     expect(isOnboardingBuildTurn({ ...getRow(), node: "done" }, "en", turn)).toBe(false);
   });
 
-  it("ends the welcome after the build with the explore message", () => {
+  it("counts every later turn in the build chat, and no other chat", () => {
     const { fx, getRow } = makeEffects("building");
+    startBuild(fx.progress, "build-chat");
+    const later = { agentName: "core:main", sessionId: "build-chat", prompt: "Use a table." };
 
-    const text = finishAfterBuild(fx.progress, "en");
+    expect(isOnboardingBuildTurn(getRow(), "en", later)).toBe(true);
+    expect(isOnboardingBuildTurn(getRow(), "en", { ...later, sessionId: "other-chat" })).toBe(
+      false,
+    );
+  });
+
+  it("ends the welcome after a build turn that finished, with the explore message", () => {
+    const { fx, getRow } = makeEffects("building");
+    startBuild(fx.progress, "build-chat");
+
+    const text = finishAfterBuild(fx.progress, "en", "build-chat", {
+      status: "completed",
+      suspended: false,
+    });
 
     expect(text).toContain("all set");
     expect(text).toContain("App Store");
     expect(getRow().node).toBe("done");
     expect(getRow().completedAt).toEqual(expect.any(String));
+  });
+
+  it.each([
+    ["stopped", { status: "interrupted", suspended: false }],
+    ["failed", { status: "error", suspended: false }],
+    ["parked on a card", { status: "completed", suspended: true }],
+  ] as const)("keeps waiting on the build after a turn that %s", (_label, outcome) => {
+    const { fx, getRow } = makeEffects("building");
+    startBuild(fx.progress, "build-chat");
+
+    expect(finishAfterBuild(fx.progress, "en", "build-chat", outcome)).toBeNull();
+    expect(getRow().node).toBe("building");
+  });
+
+  it("posts nothing when onboarding no longer waits on this build", () => {
+    const finished = { status: "completed", suspended: false } as const;
+    // The guardian closed the handoff while the build ran, which already closed the welcome.
+    const closed = makeEffects("done", { buildSessionId: "build-chat" });
+    expect(finishAfterBuild(closed.fx.progress, "en", "build-chat", finished)).toBeNull();
+    // The guardian started over, and a new run is building in another chat.
+    const restarted = makeEffects("building", { buildSessionId: "new-chat" });
+    expect(finishAfterBuild(restarted.fx.progress, "en", "build-chat", finished)).toBeNull();
+    expect(restarted.getRow().node).toBe("building");
+  });
+
+  it("says nothing when the build handoff ends after the welcome closed", async () => {
+    const { fx } = makeEffects("done", { completedAt: "2026-01-01" });
+
+    expect(await runTurn(DISMISSED, fx)).toEqual({ kind: "none" });
+    expect(await runTurn(resolution({ summary: "done" }), fx)).toEqual({ kind: "none" });
+    // A typed message still gets the reminder.
+    expect(await runTurn("hello again", fx)).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("already finished"),
+    });
   });
 
   it("uses the Chinese fallback title without changing the English one", async () => {

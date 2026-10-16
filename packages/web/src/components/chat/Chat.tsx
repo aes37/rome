@@ -43,6 +43,7 @@ import {
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
 import { SessionModelLabel } from "@/components/chat/SessionModelLabel";
 import { useSessionIdentity } from "@/components/chat/use-session-identity";
+import { useInvalidateSettings } from "@/hooks/use-settings";
 import { prettyAgentName } from "@/lib/agent-name";
 import { artifactLocalName } from "@/lib/artifact-name";
 import {
@@ -377,7 +378,14 @@ export function Chat({
     pinnedAgentMention: identityAgentMention,
     archivedAt,
     pinnedAt,
+    presentsAsMain,
   } = useSessionIdentity(mainSessionId);
+  // An agent that speaks as the main agent (onboarding) can rename the main
+  // agent during a turn, and messages are labelled with the cached name, so
+  // its turns refresh settings when they end.
+  const invalidateSettings = useInvalidateSettings();
+  const refreshSettingsAfterTurnRef = useRef<(() => void) | null>(null);
+  refreshSettingsAfterTurnRef.current = presentsAsMain ? () => void invalidateSettings() : null;
   // The agent a draft's first send picked stands in until the new session's
   // identity loads, so its chip does not drop out when the composer locks.
   const [createdAgentMention, setCreatedAgentMention] = useState<AgentMention | null>(null);
@@ -1120,6 +1128,7 @@ export function Chat({
       if (!isMountedRef.current) return;
       await loadMessages(sessionId, { force: true, dropLocalOptimistic: true });
       endSessionStream(sessionId, turnId);
+      refreshSettingsAfterTurnRef.current?.();
     },
     [
       consumeStream,

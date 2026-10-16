@@ -18,6 +18,8 @@ export interface SessionIdentity {
   archivedAt: string | null;
   /** ISO timestamp when the session was pinned, or null when not pinned. */
   pinnedAt: string | null;
+  /** The session's agent speaks as the main agent (onboarding). */
+  presentsAsMain: boolean;
 }
 
 /**
@@ -42,6 +44,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
   const [pinnedAgentMention, setPinnedAgentMention] = useState<AgentMention | null>(null);
   const [archivedAt, setArchivedAt] = useState<string | null>(null);
   const [pinnedAt, setPinnedAt] = useState<string | null>(null);
+  const [presentsAsMain, setPresentsAsMain] = useState(false);
 
   useEffect(() => {
     sessionGeneration.current += 1;
@@ -52,6 +55,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
       setSessionName(null);
       setArchivedAt(null);
       setPinnedAt(null);
+      setPresentsAsMain(false);
       return;
     }
     setModel(null);
@@ -72,6 +76,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
         const agentName = session?.agentName ?? null;
         if (!agentName) {
           setPinnedAgentMention(null);
+          setPresentsAsMain(false);
           return;
         }
         let appId = artifactOwnerId(agentName) ?? "";
@@ -80,7 +85,9 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
         const owner = groups.find((g) => g.agents.some((a) => a.name === agentName));
         // An agent that speaks as the main agent (onboarding) renders like an
         // unpinned session: the main agent's chosen name and avatar.
-        if (owner?.agents.find((a) => a.name === agentName)?.presentAsMain) {
+        const speaksAsMain = !!owner?.agents.find((a) => a.name === agentName)?.presentAsMain;
+        setPresentsAsMain(speaksAsMain);
+        if (speaksAsMain) {
           setPinnedAgentMention(null);
           return;
         }
@@ -100,6 +107,7 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
           setPinnedAgentMention(null);
           setArchivedAt(null);
           setPinnedAt(null);
+          setPresentsAsMain(false);
         }
       }
     })();
@@ -140,5 +148,6 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
     pinnedAgentMention: presentationMode ? null : pinnedAgentMention,
     archivedAt,
     pinnedAt,
+    presentsAsMain,
   };
 }
