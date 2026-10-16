@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "@rstest/core";
+import { eq } from "drizzle-orm";
 import { channels } from "../schema.js";
 import { createTestDb, type TestDb } from "../../test/helpers.js";
 import {
@@ -48,7 +49,7 @@ describe("ChannelRecordsRepository", () => {
     expect(records.all()).toHaveLength(1);
   });
 
-  it("gives a re-added bot the channel its deleted one held, unlinked", () => {
+  it("gives a re-added bot the channel its deleted one held, linked to main again", () => {
     const records = repository();
     const db = testDb!.db;
     records.claim(db, { id: "c1", service: "feishu" }, NOW);
@@ -57,8 +58,36 @@ describe("ChannelRecordsRepository", () => {
     records.vacate(db, "c1");
     expect(records.byId("feishu")).toMatchObject({ connectionId: null, agent: null });
 
-    expect(records.claim(db, { id: "c2", service: "feishu" }, NOW).id).toBe("feishu");
+    expect(records.claim(db, { id: "c2", service: "feishu" }, NOW)).toMatchObject({
+      id: "feishu",
+      agent: "core:main",
+    });
     expect(records.all()).toHaveLength(1);
+  });
+
+  it("links main to a linkable service's first account only", () => {
+    const records = repository();
+    const db = testDb!.db;
+
+    expect(records.claim(db, { id: "c1", service: "telegram" }, NOW).agent).toBe("core:main");
+    expect(records.claim(db, { id: "c2", service: "telegram_user" }, NOW).agent).toBe("core:main");
+    expect(records.claim(db, { id: "c3", service: "telegram" }, NOW).agent).toBeNull();
+    expect(records.claim(db, { id: "c4", service: "webchat" }, NOW).agent).toBeNull();
+    expect(records.claim(db, { id: "c5", service: "agents" }, NOW).agent).toBeNull();
+  });
+
+  it("takes back a later account unlinked", () => {
+    const records = repository();
+    const db = testDb!.db;
+    records.claim(db, { id: "c1", service: "feishu" }, NOW);
+    const later = records.claim(db, { id: "c2", service: "feishu" }, NOW).id;
+    records.link(later, "sales:agent");
+    records.vacate(db, "c2");
+
+    expect(records.claim(db, { id: "c3", service: "feishu" }, NOW)).toMatchObject({
+      id: later,
+      agent: null,
+    });
   });
 
   it("takes back the service-named channel before a later one", () => {
@@ -123,6 +152,21 @@ describe("ChannelRecordsRepository", () => {
       unlinkedFrom: "telegram",
     });
     expect(records.byId("telegram")?.agent).toBeNull();
+  });
+
+  it("links main to several channels of one platform, by its canonical id", () => {
+    const records = repository();
+    const db = testDb!.db;
+    records.claim(db, { id: "c1", service: "telegram" }, NOW);
+    const later = records.claim(db, { id: "c2", service: "telegram" }, NOW).id;
+
+    const outcome = records.link(later, "main");
+
+    expect(outcome).toMatchObject({ channel: { agent: "core:main" }, unlinkedFrom: null });
+    expect(records.byId("telegram")?.agent).toBe("core:main");
+    expect(() =>
+      db.update(channels).set({ agent: "core:main" }).where(eq(channels.service, "telegram")).run(),
+    ).not.toThrow();
   });
 
   it("lets one agent hold a channel on each platform", () => {

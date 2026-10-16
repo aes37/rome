@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LINKABLE_SERVICES } from "@rome/api-types/linked-agents";
+import { isMainAgent, LINKABLE_SERVICES, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
 import { platformOf } from "../../channels/platform.js";
 import { channels } from "../schema.js";
@@ -53,6 +53,12 @@ export class ChannelNotLinkable extends Error {
 }
 
 type Exec = DrizzleDb | DrizzleTx;
+
+/** The agent a newly backed channel starts linked to: main on a linkable
+ *  service's first account, the one carrying the service's name. */
+function firstAccountAgent(id: string, service: string): string | null {
+  return id === service && LINKABLE_SERVICES.has(service) ? MAIN_AGENT_ID : null;
+}
 
 /** The service a channel belongs to. A service's first channel carries the
  *  service's name, so a name with no record answers for itself. */
@@ -125,7 +131,10 @@ export class ChannelRecordsRepository {
    * it takes back the service's unbacked channel, the one carrying the
    * service's name first, so a deleted and re-added bot keeps its channel.
    * Failing that, it gets the service's name if no channel holds it, and a
-   * fresh opaque id otherwise.
+   * fresh opaque id otherwise. A channel it gets that carries the service's
+   * name, the service's first account, is linked to main when the service is
+   * linkable, so a guardian's first bot answers. A later account starts
+   * unlinked.
    */
   claim(exec: Exec, connection: { id: string; service: string }, now: Date): ChannelRecord {
     const held = exec.select().from(channels).where(eq(channels.connectionId, connection.id)).get();
@@ -144,23 +153,25 @@ export class ChannelRecordsRepository {
           a.createdAt.getTime() - b.createdAt.getTime(),
       )[0];
     if (vacant) {
+      const agent = firstAccountAgent(vacant.id, service);
       exec
         .update(channels)
-        .set({ connectionId: connection.id })
+        .set({ connectionId: connection.id, agent })
         .where(eq(channels.id, vacant.id))
         .run();
-      return toRecord({ ...vacant, connectionId: connection.id });
+      return toRecord({ ...vacant, connectionId: connection.id, agent });
     }
 
     const serviceIdTaken =
       exec.select({ id: channels.id }).from(channels).where(eq(channels.id, service)).get() !==
       undefined;
+    const id = serviceIdTaken ? randomUUID() : service;
     const row = {
-      id: serviceIdTaken ? randomUUID() : service,
+      id,
       service,
       platform: platformOf(service),
       connectionId: connection.id,
-      agent: null,
+      agent: firstAccountAgent(id, service),
       createdAt: now,
     };
     exec.insert(channels).values(row).run();
@@ -180,12 +191,15 @@ export class ChannelRecordsRepository {
 
   /**
    * Link `agent` to channel `id`, or unlink it with null. On one platform an
-   * agent is linked to at most one channel, so linking it here unlinks it from
-   * any other channel on this platform, in the same transaction. The partial
-   * unique index rejects any write that would break the rule anyway. Only a
-   * channel of a linkable service takes a link; unlinking is always open.
+   * agent other than main is linked to at most one channel, so linking it here
+   * unlinks it from any other channel on this platform, in the same
+   * transaction. The partial unique index rejects any write that would break
+   * the rule anyway. Main may hold several channels of one platform, and is
+   * stored by its canonical id. Only a channel of a linkable service takes a
+   * link; unlinking is always open.
    */
-  link(id: string, agent: string | null): LinkOutcome {
+  link(id: string, requested: string | null): LinkOutcome {
+    const agent = requested !== null && isMainAgent(requested) ? MAIN_AGENT_ID : requested;
     return this.db.transaction((tx) => {
       const row = tx.select().from(channels).where(eq(channels.id, id)).get();
       if (!row) throw new ChannelRecordNotFound(id);
@@ -194,7 +208,7 @@ export class ChannelRecordsRepository {
       }
       if (agent !== null && row.connectionId === null) throw new ChannelUnbacked(id);
       let unlinkedFrom: string | null = null;
-      if (agent !== null) {
+      if (agent !== null && agent !== MAIN_AGENT_ID) {
         const holder = tx
           .select({ id: channels.id })
           .from(channels)

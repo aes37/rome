@@ -14,6 +14,7 @@ import type { OutboxMessage } from "@rome/api-types/people";
 import type { SessionActor } from "../../lib/session-actor.js";
 import type { UsageEvent } from "../../usage/events.js";
 import { TURN_FEEDBACK_RATINGS } from "@rome/api-types/trace-segments";
+import { MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 import {
   APPROVAL_EXECUTION_STATES,
   APPROVAL_STATUSES,
@@ -881,8 +882,9 @@ export const connections = sqliteTable("connections", {
 // outlives its Connection, unbacked and unlinked, so the service's next
 // Connection takes it back. `agent` is the linked agent's canonical id.
 // `platform` is stored, not derived on read, so the partial unique index can
-// hold that on one platform an agent is linked to at most one channel; a row
-// keeps the platform it was minted on.
+// hold that on one platform an agent other than main is linked to at most one
+// channel; a row keeps the platform it was minted on. Main is exempt, since
+// it answers a platform's bot and its signed-in user at once.
 export const channels = sqliteTable(
   "channels",
   {
@@ -897,7 +899,9 @@ export const channels = sqliteTable(
     uniqueIndex("channels_connection_unique").on(table.connectionId),
     uniqueIndex("channels_platform_agent_unique")
       .on(table.platform, table.agent)
-      .where(sql`${table.agent} IS NOT NULL`),
+      .where(
+        sql`${table.agent} IS NOT NULL AND ${table.agent} <> ${sql.raw(`'${MAIN_AGENT_ID}'`)}`,
+      ),
   ],
 );
 

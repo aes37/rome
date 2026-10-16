@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "dfd9f8dd-be65-49ed-8a69-f5b94c0d9a19",
+  "id": "3226368c-bcb9-4c29-8cd3-23eaeb792ad6",
   "prevId": "3ef1e617-c96b-429c-8748-29cf85c1a528",
   "tables": {
     "action_executions": {
@@ -404,7 +404,7 @@
             "agent"
           ],
           "isUnique": true,
-          "where": "\"channels\".\"agent\" IS NOT NULL"
+          "where": "\"channels\".\"agent\" IS NOT NULL AND \"channels\".\"agent\" <> 'core:main'"
         }
       },
       "foreignKeys": {},

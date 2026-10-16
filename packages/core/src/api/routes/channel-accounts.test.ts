@@ -93,12 +93,10 @@ describe("channel account routes", () => {
     expect(records.byId("feishu")?.agent).toBeNull();
   });
 
-  it("refuses main, an agent that is not loaded, and a body without an agent", async () => {
+  it("refuses an agent that is not loaded, and a body without an agent", async () => {
     const { records, link, app, db } = setup();
     records.claim(db, { id: "c1", service: "feishu" }, NOW);
 
-    expect((await link("feishu", "main")).status).toBe(400);
-    expect((await link("feishu", "core:main")).status).toBe(400);
     expect((await link("feishu", "ghost:agent")).status).toBe(400);
     const empty = await app.request("/channels/accounts/feishu/agent", {
       method: "PUT",
@@ -106,15 +104,37 @@ describe("channel account routes", () => {
       body: "{}",
     });
     expect(empty.status).toBe(400);
-    expect(records.byId("feishu")?.agent).toBeNull();
+    expect(records.byId("feishu")?.agent).toBe("core:main");
   });
 
-  it("refuses a name that resolves to main", async () => {
-    const { records, link, db } = setup({ assistant: "core:main" });
+  it("links main like any agent, by its canonical id", async () => {
+    const { records, link, db } = setup({ main: "core:main", assistant: "core:main" });
     records.claim(db, { id: "c1", service: "feishu" }, NOW);
+    records.link("feishu", null);
 
-    expect((await link("feishu", "assistant")).status).toBe(400);
-    expect(records.byId("feishu")?.agent).toBeNull();
+    const res = await link("feishu", "main");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      account: { id: "feishu", agent: "core:main" },
+      unlinkedFrom: null,
+    });
+    records.link("feishu", null);
+    expect((await link("feishu", "assistant")).status).toBe(200);
+    expect(records.byId("feishu")?.agent).toBe("core:main");
+  });
+
+  it("keeps main on every account of one platform it is linked to", async () => {
+    const { records, link, db } = setup({ main: "core:main" });
+    records.claim(db, { id: "c1", service: "telegram" }, NOW);
+    records.claim(db, { id: "c2", service: "telegram_user" }, NOW);
+    records.link("telegram_user", null);
+
+    const res = await link("telegram_user", "main");
+
+    expect(await res.json()).toMatchObject({ unlinkedFrom: null });
+    expect(records.byId("telegram")?.agent).toBe("core:main");
+    expect(records.byId("telegram_user")?.agent).toBe("core:main");
   });
 
   it("refuses to link an account of a service that is not linkable", async () => {
@@ -145,6 +165,6 @@ describe("channel account routes", () => {
     });
 
     expect(res.status).toBe(403);
-    expect(records.byId("feishu")?.agent).toBeNull();
+    expect(records.byId("feishu")?.agent).toBe("core:main");
   });
 });

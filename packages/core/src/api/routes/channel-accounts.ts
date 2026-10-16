@@ -7,7 +7,6 @@ import type {
   LinkAccountAgentRequest,
   LinkAccountAgentResult,
 } from "@rome/api-types/channel-accounts";
-import { isMainAgent } from "@rome/api-types/linked-agents";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -44,8 +43,9 @@ export function channelAccountsRoutes(deps: Pick<ApiDeps, "db" | "agentLoader">)
   });
 
   // Link an agent to an account, or unlink it with `null`. Linking an agent
-  // that has an account on the same platform takes it off that account. Only
-  // an account of a linkable service takes a link; unlinking is always open.
+  // other than main that has an account on the same platform takes it off
+  // that account. Only an account of a linkable service takes a link;
+  // unlinking is always open.
   app.put("/channels/accounts/:id/agent", async (c) => {
     if (!isSameOriginMutationRequest(c.req.raw)) {
       return c.json({ error: "Cross-site requests are not allowed." }, 403);
@@ -59,12 +59,7 @@ export function channelAccountsRoutes(deps: Pick<ApiDeps, "db" | "agentLoader">)
       if (!deps.agentLoader.has(agent)) {
         return c.json({ error: `Agent "${agent}" is not loaded.` }, 400);
       }
-      // Checked on the canonical id too, so an alias of main is refused.
-      const canonical = deps.agentLoader.getCanonicalName(agent);
-      if (isMainAgent(agent) || isMainAgent(canonical)) {
-        return c.json({ error: "Main answers wherever no agent is linked. Unlink instead." }, 400);
-      }
-      agent = canonical;
+      agent = deps.agentLoader.getCanonicalName(agent);
     }
     const id = c.req.param("id");
     try {
