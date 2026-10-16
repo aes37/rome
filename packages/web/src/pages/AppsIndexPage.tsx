@@ -27,6 +27,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { AppStoreSheet } from "@/components/AppStoreSheet";
 import { TileIcon } from "@/components/app-tile-icon";
 import { getHostAppRoute } from "@/lib/auth-routing";
+import { isCarrierApp } from "@/lib/chat-helpers";
 import { isImeCompositionEvent } from "@/lib/keyboard-submit";
 import { cn } from "@/lib/utils";
 import { ListToolbar } from "@rome-os/ui/layout-list";
@@ -312,9 +313,10 @@ export default function AppsIndexPage() {
   const closeRemixDialog = () => {
     setRemixTarget(null);
   };
-  // First-party apps the launcher leaves out: they still install and run, but
-  // the guardian has nothing to open in them from here.
-  const listedApps = apps?.filter((app) => !isUnlistedBuiltin(app)) ?? null;
+  // Apps the launcher leaves out: first-party apps with nothing to open from
+  // here, and carrier apps (e.g. user-skills), which are installed plumbing.
+  const listedApps =
+    apps?.filter((app) => !isUnlistedBuiltin(app) && !isCarrierApp(app.id)) ?? null;
 
   const normalizedQuery = query.trim().toLowerCase();
   const isSearching = normalizedQuery.length > 0;

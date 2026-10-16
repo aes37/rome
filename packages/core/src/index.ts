@@ -80,6 +80,7 @@ import { createAccountNames } from "./channels/account-names.js";
 import { agentsAccounts, externalAgents } from "./channels/agents-accounts.js";
 import { channelList, joinLaterChannel } from "./channels/channel-list.js";
 import { claimChannels } from "./channels/claim-channels.js";
+import { linkedAgentResolver } from "./channels/linked-agents.js";
 import { recordedChannelOf } from "./channels/connection-ports.js";
 import { ChannelRecordsRepository } from "./db/repositories/channel-records.js";
 import { sendApprovalCard } from "./actions/approval-card.js";
@@ -203,6 +204,7 @@ import {
 import { ConnectionRegistry, DrizzleGrantLedger } from "./connections/index.js";
 import { SetupManager } from "./connections/setup/manager.js";
 import { AGENTS_SERVICE } from "./connections/integrations/agents.js";
+import { autoConnectEmail } from "./connections/integrations/email.js";
 import { registerBuiltinConnections } from "./connections/integrations/index.js";
 import {
   ConversationSettingsRepository,
@@ -800,6 +802,7 @@ async function main() {
           .talker;
         return talker ? talkerChannelSurface(talker) : null;
       },
+      serviceOfChannel,
     },
     { keepAliveAcrossTurns: true, idleTtlMs: 15_000 },
   );
@@ -1134,6 +1137,7 @@ async function main() {
   // Register every built-in descriptor now (before load()/import), threading the
   // runtime deps the factories need from here where the repos/adapters exist.
   const { RomeCloudMailProvider } = await import("./lib/rome-cloud-mail.js");
+  const mailProvider = new RomeCloudMailProvider();
   registerBuiltinConnections(connectionRegistry, {
     settingsRepo,
     conversationSettings,
@@ -1155,7 +1159,7 @@ async function main() {
         });
       });
     },
-    mailProvider: new RomeCloudMailProvider(),
+    mailProvider,
     // Keep the prompt-builder's "our own inbox address" ref pointed at the
     // current email epoch (birth, relock/re-authorize, Disconnected rebuild).
     onEmailAdapterBuilt: (adapter) => {
@@ -1191,6 +1195,7 @@ async function main() {
   // The channel-message hook hears every channel through these, so each
   // inbound message it handles is traced and logged once.
   const hookChannels = withInboundSpans(channels, "channel-message");
+  const linkedAgentOf = linkedAgentResolver(channelRecords, agentLoader);
   let messageHook: ChannelMessageHook = createNoopChannelMessageHook();
   const channelMessageHookArtifact = appCatalog
     .listArtifacts("hook")
@@ -1202,6 +1207,7 @@ async function main() {
         conversationSettings,
         chatStop,
         channels: hookChannels,
+        linkedAgentOf,
       });
       if (loadedHook) {
         messageHook = loadedHook;
@@ -1236,7 +1242,13 @@ async function main() {
   const reloadChannelMessageHook = messageHandlerRegistered
     ? createChannelMessageHookReloader({
         catalog: appCatalog,
-        deps: { actionEngine, conversationSettings, chatStop, channels: hookChannels },
+        deps: {
+          actionEngine,
+          conversationSettings,
+          chatStop,
+          channels: hookChannels,
+          linkedAgentOf,
+        },
         getCurrent: () => messageHook,
         setCurrent: (hook) => {
           messageHook = hook;
@@ -1458,6 +1470,20 @@ async function main() {
     const apiDeps: ApiDeps = {
       feedback: feedbackClient,
       provisionNodeCaller,
+      autoConnectEmail: async () => {
+        try {
+          const connected = await autoConnectEmail({
+            registry: connectionRegistry,
+            provision: () => mailProvider.provision(),
+            settings: settingsRepo,
+          });
+          if (connected) log.info("email connected on first cloud sign-in");
+        } catch (err) {
+          log.warn("email auto-connect failed; the guardian can connect it in settings", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      },
       nodeDevices,
       notifyPairingResolution: (approval) => notifyPairingResolution(connectionRegistry, approval),
       channelsService,
