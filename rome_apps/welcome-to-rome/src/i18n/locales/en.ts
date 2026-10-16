@@ -18,6 +18,8 @@ const en = {
       "Something went wrong with the welcome — you can start chatting with Rome normally.",
     takeaway: "**What I took away**\n\n{{summary}}",
     pickedIdea: 'Let\'s build "{{title}}".',
+    buildBrief:
+      "{{prompt}}\n\nIf you need to ask me anything, ask with the ask_question tool, not in plain text.",
     pickedIdeaDraft:
       "Let's build \"{{title}}\". I've opened a fresh chat with the kickoff prompt ready. Send it once an AI is connected.",
     finishedAfterBuild:

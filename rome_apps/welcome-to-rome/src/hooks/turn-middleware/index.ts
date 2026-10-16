@@ -25,6 +25,15 @@ import { normalizeWelcomeLocale, type WelcomeLocale } from "../../locale.js";
 
 const AGENT_NAME = "welcome-to-rome";
 
+// Closing messages still posting, by build chat, each resolving with whether it
+// posted. A later turn there waits on it instead of posting it twice. Installing
+// the first app reloads the hook, and core imports it afresh each time, so this
+// lives on the process rather than on the hook or the module.
+const CLOSING_POSTS = Symbol.for("rome.welcome-to-rome.closing-posts");
+const closingPosts: Map<string, Promise<boolean>> = ((
+  globalThis as { [CLOSING_POSTS]?: Map<string, Promise<boolean>> }
+)[CLOSING_POSTS] ??= new Map());
+
 /** Cap the inline idea brainstorm so a stuck specialist can't hang the turn —
  *  on timeout we fall back to generic starter ideas. */
 const SUMMON_TIMEOUT_MS = 90_000;
@@ -33,6 +42,11 @@ const SUMMON_TIMEOUT_MS = 90_000;
  *  chat's next turn waits on this one, so a slow channel can't hold it up;
  *  a post that lands later still ends onboarding. */
 const CLOSING_MESSAGE_TIMEOUT_MS = 10_000;
+
+/** How long a closing message may take to post before the welcome gives up on
+ *  it, so a post that never settles can't leave onboarding waiting for good.
+ *  The next finished build turn tries again. */
+const CLOSING_POST_CEILING_MS = 60_000;
 
 // Typewriter pacing for narration. We stream each text block as incremental
 // `text_delta` previews before the whole `text` block, so the guardian sees it
@@ -82,10 +96,6 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
   // We catch our own failures and emit a scripted fallback, so the chain never
   // sees a throw — but declare fail-open so a bug can't ever break normal chat.
   readonly onError = "fail-open" as const;
-
-  // Build chats whose closing message is still posting, so a later turn there
-  // can't post it twice.
-  private readonly closingInFlight = new Set<string>();
 
   constructor(private readonly deps: TurnMiddlewareHookDeps) {}
 
@@ -179,7 +189,7 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
     outcome: TurnOutcome | undefined,
   ): Promise<void> {
     const appContext = this.deps.appContext;
-    if (!appContext?.db || this.closingInFlight.has(threadId)) return;
+    if (!appContext?.db || closingPosts.has(threadId)) return;
     const db = appContext.db;
     const warn = (detail: Record<string, unknown>) =>
       this.deps.logger.warn("welcome-to-rome could not post the closing message", {
@@ -203,8 +213,7 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
     }
     if (!text) return;
 
-    this.closingInFlight.add(threadId);
-    const posting = (async () => {
+    const sending = (async () => {
       try {
         const sent = await appContext.runAction("send_message", {
           channel: "webchat",
@@ -213,15 +222,30 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
         });
         if (sent.status !== "ok") {
           warn({ status: sent.status });
-          return;
+          return false;
         }
         finishBuild(createProgressRepository(db), threadId);
+        return true;
       } catch (err) {
         warn({ error: err instanceof Error ? err.message : String(err) });
-      } finally {
-        this.closingInFlight.delete(threadId);
+        return false;
       }
     })();
+    let ceiling: ReturnType<typeof setTimeout> | undefined;
+    const posting = Promise.race([
+      sending,
+      new Promise<boolean>((resolve) => {
+        ceiling = setTimeout(() => {
+          warn({ error: "timed out" });
+          resolve(false);
+        }, CLOSING_POST_CEILING_MS);
+      }),
+    ]).finally(() => {
+      clearTimeout(ceiling);
+      if (closingPosts.get(threadId) === posting) closingPosts.delete(threadId);
+    });
+    closingPosts.set(threadId, posting);
+
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, CLOSING_MESSAGE_TIMEOUT_MS);
@@ -261,7 +285,7 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
       // ordering against the emits that follow.
       say: (text: string) => typeOut((event) => ctx.emit(event), text, "commentary"),
       summon: (agentName, prompt) => this.summon(agentName, prompt),
-      closingInFlight: (threadId) => this.closingInFlight.has(threadId),
+      closingInFlight: (threadId) => closingPosts.get(threadId) ?? null,
     };
   }
 

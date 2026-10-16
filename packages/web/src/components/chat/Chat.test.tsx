@@ -577,6 +577,73 @@ describe("Chat session events over the live-events socket", () => {
     expect(MockEventSource.instances).toHaveLength(0);
   });
 
+  it("still delivers a message that lands in a handoff's child after the handoff closed", async () => {
+    rs.mocked(listSessionMessages).mockImplementation(async (sessionId: string) =>
+      sessionId === "session-1"
+        ? [
+            {
+              id: "m-handoff",
+              sessionId: "session-1",
+              turnId: "turn-1",
+              role: "assistant",
+              content: JSON.stringify([
+                {
+                  type: "handoff",
+                  toolUseId: "h1",
+                  appId: "welcome-to-rome",
+                  agentName: "core:main",
+                  childSessionId: "child-1",
+                  payload: { agentLabel: "Nova" },
+                },
+              ]),
+              createdAt: "2026-10-05T00:00:00.000Z",
+            },
+            {
+              id: "m-closed",
+              sessionId: "session-1",
+              turnId: "turn-2",
+              role: "user",
+              content: JSON.stringify([
+                { type: "interaction_result", toolUseId: "h1", output: { dismissed: true } },
+              ]),
+              createdAt: "2026-10-05T00:01:00.000Z",
+            },
+          ]
+        : [],
+    );
+    const onSessionMessage = rs.fn();
+    try {
+      renderChat(
+        <Chat sessionId="session-1" onSessionMessage={onSessionMessage} />,
+        fakeSocketLiveEventsClient(),
+      );
+      const socket = accept();
+      await waitFor(() =>
+        expect(socket.sent).toContainEqual({ type: "subscribe", topic: "chat.session:child-1" }),
+      );
+
+      // An app posts into the closed handoff's chat, as the welcome's closing message does.
+      act(() =>
+        socket.receive({
+          type: "event",
+          topic: "chat.session:child-1",
+          event: "message_insert",
+          data: {
+            id: "m-late",
+            sessionId: "child-1",
+            turnId: null,
+            role: "assistant",
+            content: JSON.stringify([{ type: "text", content: "You're all set." }]),
+            createdAt: "2026-10-05T00:02:00.000Z",
+          },
+        }),
+      );
+      expect(onSessionMessage).toHaveBeenCalledWith({ sessionId: "child-1", turnId: null });
+    } finally {
+      rs.mocked(listSessionMessages).mockResolvedValue([]);
+    }
+  });
+
   it("resyncs messages once resubscribed after a drop, and when the server refuses the topic", async () => {
     renderChat(<Chat sessionId="session-1" />, fakeSocketLiveEventsClient());
     const first = accept();

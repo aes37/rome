@@ -20,6 +20,10 @@ export interface WelcomeCopy {
   unexpectedError: string;
   takeaway(summary: string): string;
   pickedIdea(idea: AppIdea): string;
+  /** The build's opening brief: the idea's prompt, plus a request to ask the
+   *  guardian through the question card, which parks the turn instead of
+   *  ending the build. */
+  buildBrief(idea: AppIdea): string;
   /** A picked idea with no AI connected: the build waits as a draft in a new chat. */
   pickedIdeaDraft(idea: AppIdea): string;
   finishedNoPick: string;
@@ -59,6 +63,7 @@ export function copyFor(locale: WelcomeLocale): WelcomeCopy {
     takeaway: (summary) =>
       formatMessage(copy.takeaway, { summary: withEndPunctuation(summary, locale) }),
     pickedIdea: (idea) => formatMessage(copy.pickedIdea, { title: idea.title }),
+    buildBrief: (idea) => formatMessage(copy.buildBrief, { prompt: idea.prompt }),
     pickedIdeaDraft: (idea) => formatMessage(copy.pickedIdeaDraft, { title: idea.title }),
     finishedNoPick: copy.finishedNoPick,
     finishedAfterBuild: copy.finishedAfterBuild,

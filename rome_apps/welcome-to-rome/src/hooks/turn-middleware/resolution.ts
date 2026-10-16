@@ -28,7 +28,7 @@ const HOST_CONTEXT_BLOCK = /^<(thread_context|workspace_context)>[\s\S]*?<\/\1>\
 
 /** The prompt core built for the turn, without the context blocks it put ahead
  *  of it. */
-function withoutHostContext(prompt: string): string {
+export function withoutHostContext(prompt: string): string {
   let rest = prompt;
   for (let block = HOST_CONTEXT_BLOCK.exec(rest); block; block = HOST_CONTEXT_BLOCK.exec(rest)) {
     rest = rest.slice(block[0].length);

@@ -242,8 +242,9 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
     );
     await rs.waitFor(() => expect(runAction).toHaveBeenCalledOnce());
 
+    // The welcome's turn waits on the post rather than repeating it.
     const welcomeEmitted: AgentMessage[] = [];
-    await hook.handle(
+    const welcomeTurn = hook.handle(
       makeContext(
         "welcome-to-rome:welcome-to-rome",
         welcomeEmitted,
@@ -252,12 +253,118 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
       ),
       rs.fn(async () => {}),
     );
-    expect(welcomeEmitted).toEqual([]);
     expect(progress.row.node).toBe("building");
 
     land({ status: "ok" });
-    await turn;
+    await Promise.all([turn, welcomeTurn]);
+    expect(welcomeEmitted).toEqual([]);
     expect(progress.row.node).toBe("done");
+  });
+
+  it("closes the welcome itself when the guardian closes the handoff and the post then fails", async () => {
+    startBuilding();
+    const { deps, runAction } = makeDeps([]);
+    let land: (result: { status: string }) => void = () => {};
+    runAction.mockImplementationOnce(
+      () => new Promise<{ status: string }>((resolve) => (land = resolve)),
+    );
+    const hook = createHook(deps);
+    const turn = hook.handle(
+      makeContext("core:main", [], IDEA),
+      rs.fn(async () => finished),
+    );
+    await rs.waitFor(() => expect(runAction).toHaveBeenCalledOnce());
+
+    const welcomeEmitted: AgentMessage[] = [];
+    const welcomeTurn = hook.handle(
+      makeContext(
+        "welcome-to-rome:welcome-to-rome",
+        welcomeEmitted,
+        "The guardian dismissed the interaction without producing a result.",
+        "webchat:welcome-chat",
+      ),
+      rs.fn(async () => {}),
+    );
+    // The welcome's turn reaches the post before it fails.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    land({ status: "error" });
+    await Promise.all([turn, welcomeTurn]);
+
+    expect(welcomeEmitted).toContainEqual({
+      type: "result",
+      content: expect.stringContaining("all set"),
+    });
+    expect(progress.row.node).toBe("done");
+  });
+
+  it("keeps one closing message when installing the first app reloads the hook mid-build", async () => {
+    startBuilding();
+    const { deps, runAction } = makeDeps([]);
+    let land: (result: { status: string }) => void = () => {};
+    runAction.mockImplementationOnce(
+      () => new Promise<{ status: string }>((resolve) => (land = resolve)),
+    );
+    const turn = createHook(deps).handle(
+      makeContext("core:main", [], IDEA),
+      rs.fn(async () => finished),
+    );
+    await rs.waitFor(() => expect(runAction).toHaveBeenCalledOnce());
+
+    // Core builds a fresh hook on reload; the running build keeps the old one.
+    const reloaded = createHook(deps);
+    await reloaded.handle(
+      makeContext("core:main", [], "Rename it."),
+      rs.fn(async () => finished),
+    );
+    const welcomeEmitted: AgentMessage[] = [];
+    const welcomeTurn = reloaded.handle(
+      makeContext(
+        "welcome-to-rome:welcome-to-rome",
+        welcomeEmitted,
+        "The guardian dismissed the interaction without producing a result.",
+        "webchat:welcome-chat",
+      ),
+      rs.fn(async () => {}),
+    );
+    land({ status: "ok" });
+    await Promise.all([turn, welcomeTurn]);
+
+    expect(runAction).toHaveBeenCalledOnce();
+    expect(welcomeEmitted).toEqual([]);
+    expect(progress.row.node).toBe("done");
+  });
+
+  it("gives up on a post that never settles, so a later finished turn posts again", async () => {
+    rs.useFakeTimers();
+    try {
+      startBuilding();
+      const { deps, runAction } = makeDeps([]);
+      runAction.mockImplementationOnce(() => new Promise<{ status: string }>(() => {}));
+      const hook = createHook(deps);
+
+      const turn = hook.handle(
+        makeContext("core:main", [], IDEA),
+        rs.fn(async () => finished),
+      );
+      await rs.advanceTimersByTimeAsync(10_000);
+      await turn;
+      // Still within the ceiling: a finished turn doesn't post a second message.
+      await hook.handle(
+        makeContext("core:main", [], "Rename it."),
+        rs.fn(async () => finished),
+      );
+      expect(runAction).toHaveBeenCalledOnce();
+
+      await rs.advanceTimersByTimeAsync(50_000);
+      await hook.handle(
+        makeContext("core:main", [], "Add a due date."),
+        rs.fn(async () => finished),
+      );
+      expect(runAction).toHaveBeenCalledTimes(2);
+      expect(progress.row.node).toBe("done");
+    } finally {
+      rs.useRealTimers();
+    }
   });
 
   it("posts nothing when the guardian closes the handoff while the locale loads", async () => {

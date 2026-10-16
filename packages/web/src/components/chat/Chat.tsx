@@ -803,15 +803,16 @@ export function Chat({
     for (const h of handoffList) loadMessages(h.childSessionId);
   }, [handoffList, loadMessages]);
 
-  // Subscribe to the main session and the floor (the only one streaming): a
-  // handoff's child streams while it holds the floor; the main session streams
-  // again once it resumes. Each child holds one subscription through useLiveEvents.
+  // Subscribe to the main session, the floor (the only one streaming), and every
+  // handoff child in the transcript: a message can still land in a child after
+  // its handoff closed, such as one an app posts there. Each session holds one
+  // subscription through useLiveEvents.
   const sessionEventIds = useMemo(
     () =>
-      Array.from(new Set([mainSessionId, floorSessionId])).filter((id): id is string =>
-        Boolean(id),
-      ),
-    [mainSessionId, floorSessionId],
+      Array.from(
+        new Set([mainSessionId, floorSessionId, ...handoffList.map((h) => h.childSessionId)]),
+      ).filter((id): id is string => Boolean(id)),
+    [mainSessionId, floorSessionId, handoffList],
   );
   const handleMessageInsert = useCallback(
     (sid: string, message: ChatMessage) => {

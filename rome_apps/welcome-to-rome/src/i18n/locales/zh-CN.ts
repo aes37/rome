@@ -16,6 +16,7 @@ const zhCN = {
     unexpectedError: "欢迎流程出了点问题，不过你可以直接开始和 Rome 聊天。",
     takeaway: "**我记住了什么**\n\n{{summary}}",
     pickedIdea: "我们来做「{{title}}」。",
+    buildBrief: "{{prompt}}\n\n如果需要问我问题，请用 ask_question 工具提问，不要直接用文字问。",
     pickedIdeaDraft:
       "我们来做「{{title}}」。我已经打开了一个新的聊天，启动提示词准备好了，连接 AI 后发送即可。",
     finishedAfterBuild:

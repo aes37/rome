@@ -22,7 +22,12 @@ import type {
 import { encodeIdeas } from "../../db/repositories/progress.js";
 import { genericIdeas, introQuestionFor } from "../../i18n/locales/index.js";
 import { guardianLanguageInstruction, type WelcomeLocale } from "../../locale.js";
-import { isDismissedInteraction, isInteractionResult, readResolutionJson } from "./resolution.js";
+import {
+  isDismissedInteraction,
+  isInteractionResult,
+  readResolutionJson,
+  withoutHostContext,
+} from "./resolution.js";
 import type { AskQuestion } from "./component.js";
 
 const MEMORY_AGENT = "welcome-memory";
@@ -76,8 +81,10 @@ export interface WelcomeEffects {
   /** Run a specialist agent inline (no child session / approval) and return its
    *  structured output. Used for autonomous steps like the idea brainstorm. */
   summon(agentName: string, prompt: string): Promise<SummonResult>;
-  /** Whether the closing message is still posting to this build chat. */
-  closingInFlight(threadId: string): boolean;
+  /** The closing message still posting to this build chat, resolving with
+   *  whether it posted, or null when none is. The post is bounded, so awaiting
+   *  it never hangs. */
+  closingInFlight(threadId: string): Promise<boolean> | null;
 }
 
 interface WelcomeLanguage {
@@ -218,9 +225,10 @@ export function webchatThreadId(channelThreadKey: string): string | null {
 
 /**
  * Whether a turn belongs to the onboarding build while onboarding waits on it.
- * The build runs in a webchat chat, and its first turn carries the picked
- * idea's kickoff prompt, which the handoff seeds. Once that turn starts, its
- * chat is the build chat, and every later turn there belongs to the build too.
+ * The build runs in a webchat chat, and its first turn's prompt is the brief
+ * the handoff seeds, after any context block core puts ahead of it. Once that
+ * turn starts, its chat is the build chat, and every later turn there belongs
+ * to the build too.
  */
 export function isOnboardingBuildTurn(
   progress: WelcomeProgress,
@@ -230,7 +238,7 @@ export function isOnboardingBuildTurn(
   if (!turn.threadId) return false;
   if (progress.buildSessionId) return progress.buildSessionId === turn.threadId;
   const buildPrompt = progress.buildPrompt?.trim();
-  return !!buildPrompt && turn.prompt.includes(buildPrompt);
+  return !!buildPrompt && withoutHostContext(turn.prompt).trimStart().startsWith(buildPrompt);
 }
 
 /** Record the chat that builds the first app, on the build's first turn. */
@@ -274,9 +282,14 @@ export function finishBuild(progress: ProgressRepository, threadId: string): voi
  * Run one user turn through the state machine. Returns what the turn should emit;
  * the caller (index.ts) turns it into events.
  */
-export async function runTurn(userText: string, fx: WelcomeEffects): Promise<TurnReply> {
-  const p = fx.progress.get();
+export async function runTurn(prompt: string, fx: WelcomeEffects): Promise<TurnReply> {
+  // What the guardian sent, without the context core put ahead of it, so a
+  // file named in the open surfaces can't read as a typed choice.
+  const userText = withoutHostContext(prompt);
   const locale = await fx.getLocale();
+  // Read after the locale, so a turn that waited on it sees what changed
+  // meanwhile, such as the build's closing message ending the welcome.
+  const p = fx.progress.get();
   const language: WelcomeLanguage = { locale, copy: copyFor(locale) };
   const now = () => new Date().toISOString();
 
@@ -376,22 +389,23 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
       if (!p.aiConnected) return ideaPicker(ideas, false);
       // The build carries on in this chat: the guardian's agent takes the floor
       // with the idea's kickoff prompt as its brief.
-      fx.progress.patch({ node: "building", buildPrompt: idea.prompt });
+      const brief = language.copy.buildBrief(idea);
+      fx.progress.patch({ node: "building", buildPrompt: brief });
       return {
         kind: "handoff",
         lead: language.copy.pickedIdea(idea),
         agentName: BUILDER_AGENT,
         agentLabel: await fx.getAgentName(),
-        brief: idea.prompt,
+        brief,
       };
     }
 
     case "building": {
       // The guardian closed the build handoff while the closing message was
-      // posting to the build chat. That message ends the welcome once it posts.
-      if (p.buildSessionId && fx.closingInFlight(p.buildSessionId)) {
-        return { kind: "none" };
-      }
+      // posting to the build chat. Once it posts, it has ended the welcome; if
+      // it fails, the welcome says it here instead.
+      const posting = p.buildSessionId ? fx.closingInFlight(p.buildSessionId) : null;
+      if (posting && (await posting)) return { kind: "none" };
       // The guardian closed the build handoff from the composer before the
       // build turn finished.
       fx.progress.patch({ node: "done", completedAt: now() });

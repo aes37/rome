@@ -49,7 +49,7 @@ function makeEffects(node: WelcomeProgress["node"], overrides: Partial<WelcomePr
     writeNames,
     say: rs.fn(async () => {}),
     summon: rs.fn(),
-    closingInFlight: rs.fn(() => false),
+    closingInFlight: rs.fn((): Promise<boolean> | null => null),
   } as unknown as WelcomeEffects;
   return { fx, writeNames, getRow: () => row, getNode: () => row.node };
 }
@@ -323,13 +323,16 @@ describe("runTurn — done", () => {
       agentName: "core:main",
       agentLabel: "Rome",
     });
-    // The brief is the idea's prompt alone. The welcome posts its own closing
-    // message after the build.
+    // The brief is the idea's prompt, plus a request to ask through the question
+    // card, so a question parks the build instead of ending it. The welcome
+    // posts its own closing message after the build.
     if (reply.kind !== "handoff") return;
-    expect(reply.brief).toBe("Build me a launch tracker.");
+    expect(reply.brief).toBe(
+      "Build me a launch tracker.\n\nIf you need to ask me anything, ask with the ask_question tool, not in plain text.",
+    );
     // Not finished yet: the welcome closes after the build turn.
     expect(getRow().node).toBe("building");
-    expect(getRow().buildPrompt).toBe("Build me a launch tracker.");
+    expect(getRow().buildPrompt).toBe(reply.brief);
     expect(getRow().completedAt).toBeNull();
   });
 
@@ -351,6 +354,49 @@ describe("runTurn — done", () => {
     });
     expect(getRow().node).toBe("done");
     expect(getRow().buildPrompt).toBeNull();
+  });
+
+  describe("with the open surfaces ahead of a typed reply", () => {
+    const ideas = [
+      { title: "Launch tracker", prompt: "Build me a launch tracker." },
+      { title: "Habit garden", prompt: "Build me a habit garden." },
+    ];
+    // A focused file whose name holds a number, as webchat puts it ahead of the turn.
+    const typed = (text: string) =>
+      `<workspace_context>\nFocused file: chapter-1.md\n</workspace_context>\n\n${text}`;
+
+    it("reads a typed number as the guardian's pick", async () => {
+      const { fx } = makeEffects("await_idea", { aiConnected: true, ideas });
+
+      const reply = await runTurn(typed("2"), fx);
+
+      expect(reply).toMatchObject({ kind: "handoff", lead: 'Let\'s build "Habit garden".' });
+    });
+
+    it("reads a typed skip as passing on every idea", async () => {
+      const { fx, getRow } = makeEffects("await_idea", { aiConnected: true, ideas });
+
+      const reply = await runTurn(typed("skip"), fx);
+
+      expect(reply).toMatchObject({ kind: "text", text: expect.stringContaining("all set") });
+      expect(getRow().buildPrompt).toBeNull();
+    });
+  });
+
+  it("reads progress after the locale, so a turn that waited on it sees the welcome end", async () => {
+    const { fx, getRow } = makeEffects("building", { buildSessionId: "build-chat" });
+    let loadLocale: (locale: "en") => void = () => {};
+    rs.mocked(fx.getLocale).mockImplementation(
+      () => new Promise((resolve) => (loadLocale = resolve)),
+    );
+
+    const turn = runTurn(DISMISSED, fx);
+    // The closing message posts and ends the welcome while the locale loads.
+    fx.progress.patch({ node: "done", completedAt: "2026-10-16T00:00:00Z" });
+    loadLocale("en");
+
+    expect(await turn).toEqual({ kind: "none" });
+    expect(getRow().node).toBe("done");
   });
 
   it("shows the picker again for a typed pick with no AI connected, since no chat opened", async () => {
@@ -378,13 +424,25 @@ describe("runTurn — done", () => {
     expect(getRow().completedAt).toEqual(expect.any(String));
   });
 
-  it("adds nothing when the build handoff closes while the closing message is posting", async () => {
+  it("adds nothing when the build handoff closes while the closing message posts", async () => {
     const { fx, getRow } = makeEffects("building", { buildSessionId: "build-chat" });
-    rs.mocked(fx.closingInFlight).mockImplementation((threadId) => threadId === "build-chat");
+    rs.mocked(fx.closingInFlight).mockImplementation((threadId) =>
+      threadId === "build-chat" ? Promise.resolve(true) : null,
+    );
 
     expect(await runTurn(DISMISSED, fx)).toEqual({ kind: "none" });
-    // The closing message ends the welcome once it posts.
+    // The posted closing message ended the welcome itself.
     expect(getRow().node).toBe("building");
+  });
+
+  it("finishes the welcome itself when the closing message it waited on fails to post", async () => {
+    const { fx, getRow } = makeEffects("building", { buildSessionId: "build-chat" });
+    rs.mocked(fx.closingInFlight).mockImplementation(() => Promise.resolve(false));
+
+    const reply = await runTurn(DISMISSED, fx);
+
+    expect(reply).toMatchObject({ kind: "text", text: expect.stringContaining("all set") });
+    expect(getRow().node).toBe("done");
   });
 
   it("recognizes the build's first turn by the picked idea's prompt, in a webchat chat", () => {
@@ -402,6 +460,16 @@ describe("runTurn — done", () => {
     };
 
     expect(isOnboardingBuildTurn(getRow(), turn)).toBe(true);
+    // Core can put the open surfaces ahead of the brief.
+    const withWorkspace = `<workspace_context>\nOpen: Notes\n</workspace_context>\n\n${turn.prompt}`;
+    expect(isOnboardingBuildTurn(getRow(), { ...turn, prompt: withWorkspace })).toBe(true);
+    // A prompt that only quotes the brief, as another handoff's could, is not the build.
+    expect(
+      isOnboardingBuildTurn(getRow(), {
+        ...turn,
+        prompt: `Help me rename this. "Build me a launch tracker."`,
+      }),
+    ).toBe(false);
     // Another offered idea, another agent, another prompt, another channel, or
     // a finished welcome is ordinary chat.
     expect(isOnboardingBuildTurn(getRow(), { ...turn, prompt: "Build me a habit garden." })).toBe(
