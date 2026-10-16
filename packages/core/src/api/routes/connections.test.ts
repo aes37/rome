@@ -532,6 +532,19 @@ describe("POST /connections", () => {
     expect(registry.find("fake-telegram")).toEqual([]);
   });
 
+  it("refuses a null body", async () => {
+    const registry = telegramRegistry();
+
+    const res = await makeApp(registry).request("/connections", {
+      method: "POST",
+      headers: { ...SAME_ORIGIN, "content-type": "application/json" },
+      body: "null",
+    });
+
+    expect(res.status).toBe(400);
+    expect(registry.find("telegram")).toEqual([]);
+  });
+
   it("rejects cross-site requests without minting", async () => {
     const registry = telegramRegistry();
 
