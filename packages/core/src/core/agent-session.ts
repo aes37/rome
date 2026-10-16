@@ -1939,10 +1939,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+const SUSPENDING_FLAG_PATTERN = /"(?:pendingInteraction|pendingApproval|handoff)"/;
+
 /**
  * True when a tool result parked the turn on a pending interaction, approval,
  * or handoff. Facade results may reach us directly, JSON-encoded, or wrapped
- * in an MCP text-content array, so normalize all three shapes.
+ * in an MCP text-content array, so normalize all three shapes. Every session
+ * runs this on every tool result, so text without one of the flag names is
+ * rejected before it is parsed.
  */
 function toolResultSuspendsTurn(output: unknown): boolean {
   let value: unknown = output;
@@ -1955,6 +1959,7 @@ function toolResultSuspendsTurn(output: unknown): boolean {
     value = textBlock?.text;
   }
   if (typeof value === "string") {
+    if (!SUSPENDING_FLAG_PATTERN.test(value)) return false;
     try {
       value = JSON.parse(value);
     } catch {
@@ -2348,7 +2353,7 @@ class AgentSessionImpl implements AgentSession {
         // translator runs on terminal and needs the full block stream to
         // reconstruct rounds and tool pairs.
         sink.blocks.push({ block: msg, tsMs: Date.now() });
-        if (msg.type === "tool_result" && toolResultSuspendsTurn(msg.output)) {
+        if (!sink.suspended && msg.type === "tool_result" && toolResultSuspendsTurn(msg.output)) {
           sink.suspended = true;
         }
         this.trackTurnMetrics(msg);
@@ -3579,7 +3584,11 @@ class AgentSessionImpl implements AgentSession {
             }
             return;
           }
-          if (event.type === "tool_result" && toolResultSuspendsTurn(event.output)) {
+          if (
+            !sink.suspended &&
+            event.type === "tool_result" &&
+            toolResultSuspendsTurn(event.output)
+          ) {
             sink.suspended = true;
           }
           const outbound = validateProviderStructuredResult(
