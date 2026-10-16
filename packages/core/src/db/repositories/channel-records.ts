@@ -42,6 +42,10 @@ export class ChannelUnbacked extends Error {
 
 type Exec = DrizzleDb | DrizzleTx;
 
+/** The service a channel belongs to. A service's first channel carries the
+ *  service's name, so a name with no record answers for itself. */
+export type ServiceOfChannel = (channel: string) => string;
+
 function toRecord(row: typeof channels.$inferSelect): ChannelRecord {
   return {
     id: row.id,
