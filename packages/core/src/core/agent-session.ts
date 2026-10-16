@@ -1917,10 +1917,17 @@ interface TurnSink {
   emittedSubagentStarts: Set<string>;
   subagentLinksCleared: boolean;
   /**
-   * A tool result parked the turn on a card that waits for the guardian. A
-   * schema-bound turn is terminal-only, so its result then fails the schema.
+   * A tool result suspended the turn: it parked on a card that waits for the
+   * guardian, or it submitted an approval. A schema-bound turn is
+   * terminal-only, so its result then fails the schema.
    */
   suspended: boolean;
+  /**
+   * A tool result parked the turn on a card that waits for the guardian (a
+   * question or a handoff). An approval submission doesn't park it: the model
+   * carries on with its turn. This is what the turn outcome reports.
+   */
+  parked: boolean;
   /** The status the turn_end bracket reported, once it is published. */
   endStatus?: TurnOutcome["status"];
   /**
@@ -1942,13 +1949,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const SUSPENDING_FLAG_PATTERN = /"(?:pendingInteraction|pendingApproval|handoff)"/;
 
 /**
- * True when a tool result parked the turn on a pending interaction, approval,
- * or handoff. Facade results may reach us directly, JSON-encoded, or wrapped
- * in an MCP text-content array, so normalize all three shapes. Every session
- * runs this on every tool result, so text without one of the flag names is
- * rejected before it is parsed.
+ * How a tool result suspends the turn: `parked` on a pending interaction or
+ * handoff, `approval` for an approval submission, or null. Facade results may
+ * reach us directly, JSON-encoded, or wrapped in an MCP text-content array, so
+ * normalize all three shapes. Every session runs this on every tool result, so
+ * text without one of the flag names is rejected before it is parsed.
  */
-function toolResultSuspendsTurn(output: unknown): boolean {
+function toolResultSuspension(output: unknown): "parked" | "approval" | null {
   let value: unknown = output;
   if (isRecord(value) && Array.isArray(value.content)) value = value.content;
   if (Array.isArray(value)) {
@@ -1959,17 +1966,23 @@ function toolResultSuspendsTurn(output: unknown): boolean {
     value = textBlock?.text;
   }
   if (typeof value === "string") {
-    if (!SUSPENDING_FLAG_PATTERN.test(value)) return false;
+    if (!SUSPENDING_FLAG_PATTERN.test(value)) return null;
     try {
       value = JSON.parse(value);
     } catch {
-      return false;
+      return null;
     }
   }
-  return (
-    isRecord(value) &&
-    (value.pendingInteraction === true || value.pendingApproval === true || value.handoff === true)
-  );
+  if (!isRecord(value)) return null;
+  if (value.pendingInteraction === true || value.handoff === true) return "parked";
+  return value.pendingApproval === true ? "approval" : null;
+}
+
+function noteSuspension(sink: TurnSink, msg: AgentEvent): void {
+  if (sink.parked || msg.type !== "tool_result") return;
+  const suspension = toolResultSuspension(msg.output);
+  if (suspension) sink.suspended = true;
+  if (suspension === "parked") sink.parked = true;
 }
 
 /**
@@ -2353,9 +2366,7 @@ class AgentSessionImpl implements AgentSession {
         // translator runs on terminal and needs the full block stream to
         // reconstruct rounds and tool pairs.
         sink.blocks.push({ block: msg, tsMs: Date.now() });
-        if (!sink.suspended && msg.type === "tool_result" && toolResultSuspendsTurn(msg.output)) {
-          sink.suspended = true;
-        }
+        noteSuspension(sink, msg);
         this.trackTurnMetrics(msg);
         await this.deps.sessionsRepo.touch(this.sessionId);
 
@@ -3103,7 +3114,7 @@ class AgentSessionImpl implements AgentSession {
           if (
             this.structuredOutputValidator &&
             msg.type === "tool_result" &&
-            toolResultSuspendsTurn(msg.output)
+            toolResultSuspension(msg.output) !== null
           ) {
             outputSchemaSuspended = true;
           }
@@ -3316,6 +3327,7 @@ class AgentSessionImpl implements AgentSession {
       emittedSubagentStarts: new Set(),
       subagentLinksCleared: false,
       suspended: false,
+      parked: false,
       usageRecorded: false,
     };
     const events = this.buildTurnEvents(sink);
@@ -3584,13 +3596,7 @@ class AgentSessionImpl implements AgentSession {
             }
             return;
           }
-          if (
-            !sink.suspended &&
-            event.type === "tool_result" &&
-            toolResultSuspendsTurn(event.output)
-          ) {
-            sink.suspended = true;
-          }
+          noteSuspension(sink, event);
           const outbound = validateProviderStructuredResult(
             event,
             this.structuredOutputValidator,
@@ -3697,7 +3703,7 @@ class AgentSessionImpl implements AgentSession {
       const readOutcome = (): TurnOutcome => {
         return {
           status: sink.endStatus ?? turnEndStatus(sink, shortCircuitTerminal()),
-          suspended: sink.suspended,
+          suspended: sink.parked,
         };
       };
 

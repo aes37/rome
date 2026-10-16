@@ -9,8 +9,9 @@ const log = createLogger("middleware-chain");
 
 /**
  * What a middleware's next() returns: a thenable that records whether the
- * middleware attached a handler to it. The chain reports an inner failure as
- * the middleware's own only when it never did. A native promise can't record
+ * middleware attached a rejection handler to it (`await`, `catch`, or `then`
+ * with `onRejected`). The chain reports an inner failure as the middleware's
+ * own only when it never did. A native promise can't record
  * this, because `await` on one skips its `then`. The wrapped promise's own
  * rejection is always marked handled, since the chain surfaces it instead.
  */
@@ -26,19 +27,28 @@ class ObservedResult<T> implements PromiseLike<T> {
     onFulfilled?: ((value: T) => A | PromiseLike<A>) | null,
     onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
   ): Promise<A | B> {
-    this.observed = true;
-    return this.promise.then(onFulfilled, onRejected);
+    const handlesRejection = typeof onRejected === "function";
+    if (handlesRejection) this.observed = true;
+    return guardUnhandled(this.promise.then(onFulfilled, onRejected), handlesRejection);
   }
 
   catch<B = never>(onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<T | B> {
-    this.observed = true;
-    return this.promise.catch(onRejected);
+    return this.then(undefined, onRejected);
   }
 
   finally(onFinally?: (() => void) | null): Promise<T> {
-    this.observed = true;
-    return this.promise.finally(onFinally);
+    return guardUnhandled(this.promise.finally(onFinally), false);
   }
+}
+
+// A derived promise that handles no rejection, like `next().then(post)` or
+// `next().finally(cleanup)`, would carry the inner failure out as an unhandled
+// rejection, which exits the host. The chain reports that failure as the
+// middleware's own instead, so the derived promise's rejection is marked
+// handled.
+function guardUnhandled<R>(derived: Promise<R>, handlesRejection: boolean): Promise<R> {
+  if (!handlesRejection) derived.catch(() => {});
+  return derived;
 }
 
 /**
@@ -184,8 +194,8 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
           );
           // A middleware's layer ends only once the layers its next() started
           // have ended, even when it didn't await next(). Their failure is its
-          // own unless it attached a handler to what next() returned (await,
-          // then, catch or finally), as `try { await next() } catch` does.
+          // own unless it attached a rejection handler to what next()
+          // returned, as `try { await next() } catch` does.
           if (inner) {
             const failure = await inner.then(
               () => undefined,

@@ -735,8 +735,9 @@ export interface TurnOutcome {
   /** `interrupted` when the guardian stopped the turn, `error` when it failed,
    *  `completed` otherwise. */
   status: TurnEndEvent["status"];
-  /** The turn ended parked on a card that waits for the guardian: a question,
-   *  an approval, or a handoff. */
+  /** The turn ended parked on a card that waits for the guardian, such as a
+   *  question or a handoff. Submitting an approval doesn't count, since the
+   *  model carries on with its turn. */
   suspended: boolean;
 }
 

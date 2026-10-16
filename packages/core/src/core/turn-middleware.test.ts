@@ -388,6 +388,41 @@ describe("TurnMiddlewareChain", () => {
     expect(emitted).toEqual([{ type: "text", content: "caught" }]);
   });
 
+  it.each([
+    ["then(onFulfilled)", "void next().then(() => {});"],
+    ["finally", "void next().finally(() => {});"],
+  ])("reports an inner failure behind %s as the middleware's own", async (_label, call) => {
+    const busy = await createMiddlewareDir(
+      "derived",
+      `{
+        order: 0,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          ${call}
+        },
+      }`,
+    );
+    const failing = await createMiddlewareDir(
+      "derived-inner",
+      `{ order: 1, onError: "fail-closed", async handle() { throw new Error("inner broke"); } }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([hookRef("app.busy", busy), hookRef("app.failing", failing)]),
+    );
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(chain.run(makeCtx(), async () => {}, completed)).rejects.toThrow("inner broke");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+  });
+
   it("waits for the layers a throwing middleware started before its error leaves", async () => {
     const outer = await createMiddlewareDir(
       "drain-outer",
