@@ -633,6 +633,35 @@ describe("RecentChats", () => {
     expect(screen.queryByRole("button", { name: /Load \d+ more/ })).toBeNull();
   });
 
+  it.each([
+    ["scope", "My chats"],
+    ["status", "Active"],
+  ])("shows one page again after a %s change", async (_label, item) => {
+    const sessions = Array.from({ length: 45 }, (_, index) => ({
+      id: `session-${index + 1}`,
+      name: `Session ${index + 1}`,
+      createdAt: new Date(Date.UTC(2026, 6, 30, 0, 45 - index)).toISOString(),
+      activityAt: new Date(Date.UTC(2026, 6, 30, 0, 45 - index)).toISOString(),
+      lastSeenActivityAt: null,
+      unread: false,
+      projectName: "alpha",
+      projectPath: "alpha",
+    }));
+    mockSessions(sessions);
+    const user = userEvent.setup();
+
+    renderRecentChats();
+    await screen.findByText("Session 20");
+    await user.click(screen.getByRole("button", { name: "Load 20 more" }));
+    expect(screen.getByText("Session 40")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "List settings" }));
+    await user.click(screen.getByRole("menuitem", { name: item }));
+
+    await waitFor(() => expect(screen.queryByText("Session 21")).toBeNull());
+    expect(screen.getByText("Session 20")).toBeTruthy();
+  });
+
   it("refetches with a status query when the status filter changes", async () => {
     const spy = mockSessions([
       {

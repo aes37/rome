@@ -12,10 +12,13 @@ import { WorkspaceStoreContext } from "@/pages/free/workspace-store";
 // two link shapes the agent emits lives here, and everything else falls through
 // to the default react-router link.
 //
-//   /projects/<project>/<path>, /files/<project>/<path>, or an absolute
+//   /projects/<project>/<path>, /files[/<path>], or an absolute
 //   same-origin form           → open the projects panel + select the file
 //                                (reuses the same follow signal ChatWidget
 //                                publishes when an agent links a file).
+//                                `/projects` and `/projects/<project>` are
+//                                the Projects pages, so react-router takes
+//                                them.
 //   /apps/<appId>[/<route>][?q]  → open that app's workspace tile, preserving
 //                                 the in-app sub-route and query params so the
 //                                 tile lands on the exact linked page.
@@ -23,8 +26,13 @@ import { WorkspaceStoreContext } from "@/pages/free/workspace-store";
 // Both reuse the exact mechanisms FreeGrid already drives for agent-linked
 // files and installed apps, just triggered by an explicit click.
 
+// A file under a project: `/projects/<project>/<path>`. Agents still emit these
+// links for files.
 function isProjectsHref(href: string): boolean {
-  return href === "/projects" || href.startsWith("/projects/");
+  if (!href.startsWith("/projects/")) return false;
+  const rest = href.slice("/projects/".length);
+  const slash = rest.indexOf("/");
+  return slash > 0 && slash < rest.length - 1;
 }
 
 // `/files` is the Files page's route for the same `projects` root, so its

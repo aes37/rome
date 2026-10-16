@@ -640,7 +640,10 @@ export function RecentChats({ onSearch }: RecentChatsProps) {
                 ].map(({ value, label }) => (
                   <DropdownMenuItem
                     key={value}
-                    onSelect={() => setScope(value)}
+                    onSelect={() => {
+                      setScope(value);
+                      setVisibleCount(CHATS_PAGE_SIZE);
+                    }}
                     className={
                       scope === value ? "text-ui text-foreground" : "text-ui text-foreground/85"
                     }
@@ -663,7 +666,10 @@ export function RecentChats({ onSearch }: RecentChatsProps) {
                   return (
                     <DropdownMenuItem
                       key={value}
-                      onSelect={() => setStatusFilter(value)}
+                      onSelect={() => {
+                        setStatusFilter(value);
+                        setVisibleCount(CHATS_PAGE_SIZE);
+                      }}
                       className={
                         selected ? "text-ui text-foreground" : "text-ui text-foreground/85"
                       }

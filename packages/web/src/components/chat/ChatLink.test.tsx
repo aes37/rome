@@ -362,6 +362,24 @@ describe("ChatLink", () => {
     );
   });
 
+  it.each([
+    "/projects",
+    "/projects/website-redesign",
+  ])("leaves the Projects page link %s to react-router", (href) => {
+    const store = createWorkspaceStore();
+    const bus = createWorkspaceEventBus();
+    const opened: unknown[] = [];
+    bus.on("projects:opened", (p) => opened.push(p));
+
+    renderInWorkspace(<ChatLink href={href}>project</ChatLink>, { store, bus });
+    const link = screen.getByText("project") as HTMLAnchorElement;
+    fireEvent.click(link);
+
+    expect(link.getAttribute("href")).toBe(href);
+    expect(opened).toEqual([]);
+    expect(store.get("followTargetPath")).toBeUndefined();
+  });
+
   it("leaves the /apps index page to react-router (no app tile)", () => {
     const store = createWorkspaceStore();
     const bus = createWorkspaceEventBus();
