@@ -113,7 +113,13 @@ export const SIDEBAR_FIXED_IDS: readonly string[] = ["apps", "chat", "projects",
 
 // Built-ins behind the chevron on the divider below the fixed menu. They drop
 // open beneath the divider, in this order.
-export const SIDEBAR_MORE_IDS: readonly string[] = ["people", "sessions", "memory", "activity"];
+export const SIDEBAR_MORE_IDS: readonly string[] = [
+  "people",
+  "sessions",
+  "memory",
+  "activity",
+  "desktop",
+];
 const SIDEBAR_MORE_EXPANDED_KEY = "rome-sidebar-more-expanded";
 
 // Pins hold the guardian's apps only. Earlier versions pinned built-in pages
@@ -456,10 +462,11 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
   const moreEntries = builtinEntries(SIDEBAR_MORE_IDS);
   const moreActive = moreEntries.some((b) => isEntryActive(location.pathname, b.href));
   // Arriving on one of the group's pages opens the group, so the active row is
-  // never hidden behind the fold. The guardian can still fold it afterwards.
+  // never hidden behind the fold. It reopens on each such arrival, including a
+  // move between two of its pages. The guardian can still fold it afterwards.
   useEffect(() => {
     if (moreActive) setMoreExpanded(true);
-  }, [moreActive]);
+  }, [moreActive, location.pathname]);
 
   // Only pins whose app is installed with a frontend render; the rest wait in
   // storage in case the app comes back.

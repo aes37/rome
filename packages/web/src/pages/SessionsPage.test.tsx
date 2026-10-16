@@ -325,6 +325,11 @@ describe("SessionsPage landmarks", () => {
     }
   });
 
+  it("titles the list Usage, the name the sidebar gives the page", async () => {
+    renderIndex("/sessions/all");
+    expect(await screen.findByRole("heading", { name: "Usage" })).toBeTruthy();
+  });
+
   it("leaves the landmark to the shell on the in-shell mount", async () => {
     const view = renderIndex("/sessions/all");
     await waitFor(() => {

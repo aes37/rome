@@ -675,7 +675,7 @@ function SessionsIndexPage({
           <Page>
             <PageHeader align="end">
               <PageHeading>
-                <PageTitle>Sessions</PageTitle>
+                <PageTitle>Usage</PageTitle>
               </PageHeading>
               <PageActions>{viewSwitch}</PageActions>
             </PageHeader>

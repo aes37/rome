@@ -45,6 +45,9 @@ export function ProfileMenu({ showIdentity = false }: { showIdentity?: boolean }
       : identity?.kind === "visitor"
         ? t("profile.visitor")
         : null;
+  // The wide button's accessible name starts with the name and role it shows,
+  // so a voice user can say what they see.
+  const identityLabel = [title, subtitle, t("profile.menuLabel")].filter(Boolean).join(", ");
   const initial = title?.trim().charAt(0).toUpperCase() ?? "";
   const avatarUrl =
     identity?.kind === "guardian" || identity?.kind === "visitor" ? identity.avatarUrl : null;
@@ -83,7 +86,7 @@ export function ProfileMenu({ showIdentity = false }: { showIdentity?: boolean }
           {showIdentity ? (
             <button
               type="button"
-              aria-label={t("profile.menuLabel")}
+              aria-label={identityLabel}
               title={title ?? t("profile.menuLabel")}
               className="flex min-h-[var(--control-min-h)] w-full min-w-0 items-center gap-2 rounded-8 px-1 py-1 text-left outline-none outline-1 outline-offset-0 outline-transparent transition hover:bg-surface-hover focus-visible:outline-solid focus-visible:outline-ring/50 dark:hover:bg-surface"
             >
