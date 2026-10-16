@@ -22,7 +22,7 @@ import type { Credential, ProfileRecord } from "../../connections/types.js";
 import { ApprovalsRepository } from "../../db/repositories/approvals.js";
 import { ChannelRecordsRepository } from "../../db/repositories/channel-records.js";
 import { PersonMappingRepository } from "../../db/repositories/person-mapping.js";
-import { createTestDb } from "../../test/helpers.js";
+import { createTestDb, identityServiceOf } from "../../test/helpers.js";
 import type { ApiDeps } from "../deps.js";
 import { connectionsRoutes } from "./connections.js";
 
@@ -54,7 +54,10 @@ function makeApp(
     "/",
     connectionsRoutes({
       db,
-      approvalsRepo: new ApprovalsRepository(db),
+      approvalsRepo: new ApprovalsRepository(
+        db,
+        new PersonMappingRepository(db, identityServiceOf),
+      ),
       connectionRegistry: registry,
       personMappingRepo,
       ...overrides,
@@ -742,13 +745,17 @@ describe("connection pairing teardown", () => {
     const conn = await registry.connect("discord");
     await registry.importCredential(conn.id, "bot", fixture.botCredential());
     await registry.importCredential(conn.id, "user", fixture.userCredential());
-    const personMappingRepo = new PersonMappingRepository(db);
+    const personMappingRepo = new PersonMappingRepository(db, identityServiceOf);
     await personMappingRepo.create({
       displayName: "Guardian",
       bondLevel: "guardian",
       channelMappings: [{ channel: "discord", channelUserId: "paired" }],
     });
-    const approvalsRepo = new ApprovalsRepository(db, () => Buffer.alloc(32, 1));
+    const approvalsRepo = new ApprovalsRepository(
+      db,
+      new PersonMappingRepository(db, identityServiceOf),
+      () => Buffer.alloc(32, 1),
+    );
     const input = {
       connectionId: conn.id,
       channel: "discord" as const,
