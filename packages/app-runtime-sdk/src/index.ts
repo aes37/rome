@@ -754,7 +754,8 @@ export interface TurnMiddlewareHook {
    *  skips it and continues to `next()` so ordinary chat is never broken;
    *  `fail-closed` aborts the turn with an error event. */
   onError?: "fail-open" | "fail-closed";
-  handle(ctx: TurnMiddlewareContext, next: TurnMiddlewareNext): Promise<void>;
+  /** What it resolves with is ignored, so a passthrough can `return next()`. */
+  handle(ctx: TurnMiddlewareContext, next: TurnMiddlewareNext): Promise<unknown>;
 }
 
 export interface TurnMiddlewareHookDeps {

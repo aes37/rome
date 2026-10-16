@@ -59,7 +59,8 @@ export interface Middleware<Ctx, Outcome = void> {
   /** How the chain treats a throw: `fail-open` (default) skips the middleware
    *  and continues to `next()`; `fail-closed` aborts by rethrowing. */
   onError?: "fail-open" | "fail-closed";
-  handle(ctx: Ctx, next: () => Promise<Outcome>): Promise<void>;
+  /** What it resolves with is ignored, so a passthrough can `return next()`. */
+  handle(ctx: Ctx, next: () => Promise<Outcome>): Promise<unknown>;
 }
 
 interface LoadedMiddleware<Ctx, Outcome> {

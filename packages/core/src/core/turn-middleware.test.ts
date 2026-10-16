@@ -8,6 +8,7 @@ import type { ArtifactRef } from "../apps/state.js";
 import type {
   AgentEvent,
   TurnMiddlewareContext,
+  TurnMiddlewareHook,
   TurnMiddlewareNext,
   TurnOutcome,
 } from "@rome-os/app-runtime";
@@ -140,6 +141,16 @@ describe("TurnMiddlewareChain", () => {
       return (await next()).status;
     };
     expect(typeof readStatus).toBe("function");
+  });
+
+  it("accepts a passthrough middleware that returns next()", () => {
+    const passthrough: TurnMiddlewareHook = {
+      order: 0,
+      async handle(_ctx, next) {
+        return next();
+      },
+    };
+    expect(passthrough.order).toBe(0);
   });
 
   it("lets a middleware rewrite the input before the terminal reads it", async () => {
