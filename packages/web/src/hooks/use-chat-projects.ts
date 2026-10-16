@@ -45,6 +45,19 @@ function recordPath(project: ProjectOption): string {
   return project.projectPath || project.name;
 }
 
+/**
+ * What a project is called. Core names a record after its folder's last
+ * segment, so a subfolder such as `website-redesign/assets` would pass for a
+ * project called `assets`: it shows its whole path instead, unless the
+ * guardian gave it a name of its own.
+ */
+export function projectDisplayName(path: string, recordName?: string | null): string {
+  if (!recordName) return path;
+  const nested = path.includes("/");
+  if (nested && recordName === path.slice(path.lastIndexOf("/") + 1)) return path;
+  return recordName;
+}
+
 async function loadChatProjects(): Promise<ChatProject[]> {
   const [catalog, sessions] = await Promise.all([listProjects(), listSessions("active")]);
 
@@ -69,10 +82,7 @@ async function loadChatProjects(): Promise<ChatProject[]> {
       chats.sort((a, b) => sessionActivityTime(b) - sessionActivityTime(a));
       return {
         path,
-        // Without a record's name, the whole path: a chat started in a
-        // subfolder such as `website-redesign/assets` must not pass for a
-        // project called `assets`.
-        name: names.get(path) ?? path,
+        name: projectDisplayName(path, names.get(path)),
         chats,
         activityAt: chats[0]?.activityAt ?? null,
       };

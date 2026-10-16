@@ -30,12 +30,15 @@ const json = (body: unknown) =>
     headers: { "Content-Type": "application/json" },
   });
 
-const record = (path: string) => ({
+// Core names a record after the last segment of its folder.
+const record = (path: string, displayName = path.split("/").pop() ?? path) => ({
   name: path,
-  displayName: path,
+  displayName,
   projectPath: path,
   path: `/root/projects/${path}`,
 });
+// Records beyond the two every test has.
+let extraRecords: ReturnType<typeof record>[] = [];
 
 let sessions: ChatSession[] = [];
 let sessionsFail = false;
@@ -71,7 +74,7 @@ const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     return json({
       rootPath: "/root/projects",
       defaultPath: "/root/projects/default",
-      projects: [record("alpha"), record("empty")],
+      projects: [record("alpha"), record("empty"), ...extraRecords],
     });
   }
   if (url.pathname === "/api/projects/resolve") {
@@ -143,6 +146,7 @@ beforeEach(() => {
   rs.stubGlobal("fetch", fetchMock);
   fetchMock.mockClear();
   sessionsFail = false;
+  extraRecords = [];
   failingTrees.clear();
   resolveFails = false;
   resolveGate = null;
@@ -234,6 +238,36 @@ describe("Projects list", () => {
 
     expect(await screen.findByText("alpha/assets")).toBeTruthy();
     expect(screen.getByText("beta/assets")).toBeTruthy();
+  });
+
+  it("names a recorded subfolder project by its whole path unless the guardian renamed it", async () => {
+    extraRecords = [
+      record("website-redesign/assets"),
+      record("alpha/assets"),
+      record("beta/assets"),
+      record("beta/brand", "Brand kit"),
+    ];
+    sessions = [chat("s1", "Logo pass", "website-redesign/assets", "2026-07-03T00:00:00.000Z")];
+    const user = userEvent.setup();
+    renderAt("/projects");
+
+    expect(await screen.findByText("website-redesign/assets")).toBeTruthy();
+    expect(screen.getByText("alpha/assets")).toBeTruthy();
+    expect(screen.getByText("beta/assets")).toBeTruthy();
+    expect(screen.getByText("Brand kit")).toBeTruthy();
+    expect(screen.queryByText("assets")).toBeNull();
+
+    // Search matches the name the card shows.
+    await user.type(screen.getByLabelText("Search projects"), "redesign/");
+    expect(screen.getByText("website-redesign/assets")).toBeTruthy();
+    expect(screen.queryByText("alpha/assets")).toBeNull();
+  });
+
+  it("titles a recorded subfolder project's page with its whole path", async () => {
+    extraRecords = [record("website-redesign/assets")];
+    renderAt(`/projects/${encodeURIComponent("website-redesign/assets")}`);
+
+    expect(await screen.findByRole("heading", { name: "website-redesign/assets" })).toBeTruthy();
   });
 
   it("says when a project was updated in the dashboard's language", async () => {
