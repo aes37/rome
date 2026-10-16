@@ -1,20 +1,43 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
 import { platformOf } from "../../channels/platform.js";
 import { channels } from "../schema.js";
 import { inTransaction, type DrizzleDb, type DrizzleTx } from "../index.js";
 
 /**
  * A channel a Connection backs, as stored: its id, the service and platform
- * it is on, and the Connection behind it now (null once that Connection is
- * gone). Vocabulary: docs/concepts/messaging.md#channels.
+ * it is on, the Connection behind it now (null once that Connection is gone),
+ * and the agent linked to it. Vocabulary: docs/concepts/messaging.md#channels.
  */
 export interface ChannelRecord {
   id: string;
   service: string;
   platform: string;
   connectionId: string | null;
+  agent: string | null;
   createdAt: Date;
+}
+
+/** What a link changed: the channel as it now stands, and the channel on the
+ *  same platform the agent was taken from, if it was linked to one. */
+export interface LinkOutcome {
+  channel: ChannelRecord;
+  unlinkedFrom: string | null;
+}
+
+export class ChannelRecordNotFound extends Error {
+  constructor(readonly channel: string) {
+    super(`No channel with id "${channel}"`);
+    this.name = "ChannelRecordNotFound";
+  }
+}
+
+/** A link asked of a channel no Connection backs now. */
+export class ChannelUnbacked extends Error {
+  constructor(readonly channel: string) {
+    super(`Channel "${channel}" has no connection, so no agent can be linked to it`);
+    this.name = "ChannelUnbacked";
+  }
 }
 
 type Exec = DrizzleDb | DrizzleTx;
@@ -25,12 +48,13 @@ function toRecord(row: typeof channels.$inferSelect): ChannelRecord {
     service: row.service,
     platform: row.platform,
     connectionId: row.connectionId,
+    agent: row.agent,
     createdAt: row.createdAt,
   };
 }
 
 /**
- * The channels the Connections back.
+ * The channels the Connections back, and which agent each is linked to.
  *
  * A channel's id is minted once and never changes, since every stored row
  * spells it. It is an opaque id, except that a service's first channel carries
@@ -120,20 +144,56 @@ export class ChannelRecordsRepository {
       service,
       platform: platformOf(service),
       connectionId: connection.id,
+      agent: null,
       createdAt: now,
     };
     exec.insert(channels).values(row).run();
     return toRecord(row);
   }
 
-  /** Release the channel `connectionId` backs. The row and its id stay. */
+  /** Release the channel `connectionId` backs. The row and its id stay, and
+   *  its link goes: an agent stays linked only where it can still answer. */
   vacate(exec: Exec, connectionId: string): void {
     this.ids.clear();
     exec
       .update(channels)
-      .set({ connectionId: null })
+      .set({ connectionId: null, agent: null })
       .where(eq(channels.connectionId, connectionId))
       .run();
+  }
+
+  /**
+   * Link `agent` to channel `id`, or unlink it with null. On one platform an
+   * agent is linked to at most one channel, so linking it here unlinks it from
+   * any other channel on this platform, in the same transaction. The partial
+   * unique index rejects any write that would break the rule anyway.
+   */
+  link(id: string, agent: string | null): LinkOutcome {
+    return this.db.transaction((tx) => {
+      const row = tx.select().from(channels).where(eq(channels.id, id)).get();
+      if (!row) throw new ChannelRecordNotFound(id);
+      if (agent !== null && row.connectionId === null) throw new ChannelUnbacked(id);
+      let unlinkedFrom: string | null = null;
+      if (agent !== null) {
+        const holder = tx
+          .select({ id: channels.id })
+          .from(channels)
+          .where(
+            and(
+              eq(channels.platform, row.platform),
+              eq(channels.agent, agent),
+              ne(channels.id, id),
+            ),
+          )
+          .get();
+        if (holder) {
+          tx.update(channels).set({ agent: null }).where(eq(channels.id, holder.id)).run();
+          unlinkedFrom = holder.id;
+        }
+      }
+      tx.update(channels).set({ agent }).where(eq(channels.id, id)).run();
+      return { channel: toRecord({ ...row, agent }), unlinkedFrom };
+    });
   }
 
   /** The Connections no channel records yet, for the boot pass that gives

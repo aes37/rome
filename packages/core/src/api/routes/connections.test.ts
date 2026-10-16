@@ -120,6 +120,7 @@ describe("GET /connections", () => {
       connect: null,
       setups: {},
       channel: null,
+      linkedAgent: null,
       severalAccounts: false,
     });
 
@@ -214,6 +215,7 @@ describe("GET /connections", () => {
       connect: null,
       setups: {},
       channel: null,
+      linkedAgent: null,
       severalAccounts: false,
     });
   });
@@ -476,6 +478,30 @@ describe("POST /connections", () => {
     expect(channelOf(first.id)).toBe("telegram");
     expect(channelOf(connection.id)).toBe(records.idOf(connection.id));
     expect(channelOf(connection.id)).not.toBe("telegram");
+  });
+
+  it("reports the agent linked to each account", async () => {
+    const { db, close } = createTestDb();
+    openDbs.push(close);
+    const records = new ChannelRecordsRepository(db);
+    const registry = new ConnectionRegistry({
+      ledger: new DrizzleGrantLedger(db),
+      onMint: (tx, record) => {
+        records.claim(tx, record, record.createdAt);
+      },
+    });
+    registry.register({ ...telegram.descriptor, service: "telegram" });
+    const conn = await registry.connect("telegram");
+    records.link("telegram", "sales:agent");
+
+    const { connections } = await (
+      await makeApp(registry, undefined, { db }).request("/connections")
+    ).json();
+
+    expect(connections.find((each: { id: string }) => each.id === conn.id)).toMatchObject({
+      channel: "telegram",
+      linkedAgent: "sales:agent",
+    });
   });
 
   it("hands back an account whose setup never finished instead of minting", async () => {

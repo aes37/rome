@@ -878,10 +878,11 @@ export const connections = sqliteTable("connections", {
 // One row per channel a Connection backs: Rome's presence on a platform, with
 // an id minted once and never changed. The first channel of a service takes
 // the service's name as its id, and later ones get an opaque id. A row
-// outlives its Connection, unbacked, so the service's next Connection takes
-// it back. `platform` is stored, not
-// derived on read, so the one-agent-per-platform rule linking needs can
-// be held by a database index; a row keeps the platform it was minted on.
+// outlives its Connection, unbacked and unlinked, so the service's next
+// Connection takes it back. `agent` is the linked agent's canonical id.
+// `platform` is stored, not derived on read, so the partial unique index can
+// hold that on one platform an agent is linked to at most one channel; a row
+// keeps the platform it was minted on.
 export const channels = sqliteTable(
   "channels",
   {
@@ -890,8 +891,14 @@ export const channels = sqliteTable(
     platform: text("platform").notNull(),
     connectionId: text("connection_id"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    agent: text("agent"),
   },
-  (table) => [uniqueIndex("channels_connection_unique").on(table.connectionId)],
+  (table) => [
+    uniqueIndex("channels_connection_unique").on(table.connectionId),
+    uniqueIndex("channels_platform_agent_unique")
+      .on(table.platform, table.agent)
+      .where(sql`${table.agent} IS NOT NULL`),
+  ],
 );
 
 // The grant ledger. Rows record outcomes only — never step/flow state

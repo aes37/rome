@@ -89,6 +89,8 @@ interface ConnectionView {
   /** The id of the channel this Connection backs, for grouping; opaque and not
    *  for display. Null for a placeholder and for a service with no Talk. */
   channel: string | null;
+  /** The canonical id of the agent linked to that channel, or null. */
+  linkedAgent: string | null;
   /** Whether the guardian can add another account of this service. */
   severalAccounts: boolean;
 }
@@ -155,6 +157,7 @@ function buildConnectionView(
     connect: connectHint(conn.service),
     setups: activeSetups(manager, conn.id, Object.keys(grants)),
     channel: channel?.id ?? null,
+    linkedAgent: channel?.agent ?? null,
     severalAccounts: registry.getDescriptor(conn.service)?.severalAccounts === true,
   };
 }
@@ -236,6 +239,7 @@ function placeholderView(
     connect: connectHint(service),
     setups: activeSetups(manager, service, grantNames),
     channel: null,
+    linkedAgent: null,
     severalAccounts: descriptor.severalAccounts === true,
   };
 }
