@@ -407,8 +407,14 @@ export async function runTurn(prompt: string, fx: WelcomeEffects): Promise<TurnR
       // The guardian closed the build handoff while the closing message was
       // posting to the build chat. Once it posts, it has ended the welcome; if
       // it fails, the welcome says it here instead.
-      const posting = p.buildSessionId ? fx.closingInFlight(p.buildSessionId) : null;
-      if (posting && (await posting)) return { kind: "none" };
+      const buildChat = p.buildSessionId;
+      const posting = buildChat ? fx.closingInFlight(buildChat) : null;
+      if (posting) {
+        if (await posting) return { kind: "none" };
+        // The guardian may have started over while it was posting; that run
+        // isn't this build's to finish.
+        if (!buildChat || !waitsOnBuild(fx.progress.get(), buildChat)) return { kind: "none" };
+      }
       // The guardian closed the build handoff from the composer before the
       // build turn finished.
       fx.progress.patch({ node: "done", completedAt: now() });

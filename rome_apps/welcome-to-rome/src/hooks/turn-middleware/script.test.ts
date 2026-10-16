@@ -446,6 +446,27 @@ describe("runTurn — done", () => {
     expect(getRow().node).toBe("done");
   });
 
+  it("leaves a restarted welcome alone when the closing message it waited on fails", async () => {
+    const { fx, getRow } = makeEffects("building", { buildSessionId: "build-chat" });
+    let failPost: (posted: boolean) => void = () => {};
+    let waiting: () => void = () => {};
+    const reachedPost = new Promise<void>((resolve) => (waiting = resolve));
+    rs.mocked(fx.closingInFlight).mockImplementation(() => {
+      waiting();
+      return new Promise<boolean>((resolve) => (failPost = resolve));
+    });
+
+    const turn = runTurn(DISMISSED, fx);
+    await reachedPost;
+    // The guardian starts over while the post is still sending.
+    fx.progress.patch({ node: "await_names", buildSessionId: null, buildPrompt: null });
+    failPost(false);
+
+    expect(await turn).toEqual({ kind: "none" });
+    expect(getRow().node).toBe("await_names");
+    expect(getRow().completedAt).toBeNull();
+  });
+
   it("recognizes the build's first turn by the picked idea's prompt, in a webchat chat", () => {
     const { getRow } = makeEffects("building", {
       ideas: [
