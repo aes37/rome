@@ -226,6 +226,7 @@ export class ChannelRecordsRepository {
         }
       }
       tx.update(channels).set({ agent }).where(eq(channels.id, id)).run();
+      this.ids.clear();
       return { channel: toRecord({ ...row, agent }), unlinkedFrom };
     });
   }

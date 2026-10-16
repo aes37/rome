@@ -1,5 +1,6 @@
 // Accounts and their linked agents. An account is a channel, as the dashboard
-// shows it; one whose Connection was deleted is listed with no Connection. Vocabulary: docs/concepts/messaging.md#channels.
+// shows it; one whose Connection was deleted is listed with no Connection.
+// Vocabulary: docs/concepts/messaging.md#channels.
 // Invariants: docs/architecture/channels.md#linked-agents.
 
 import type {
@@ -18,7 +19,10 @@ import {
   type ChannelRecord,
 } from "../../db/repositories/channel-records.js";
 import { isSameOriginMutationRequest } from "../../lib/mutation-origin.js";
+import { createLogger } from "../../logger.js";
 import type { ApiDeps } from "../deps.js";
+
+const log = createLogger("api:channel-accounts");
 
 const linkBodySchema: z.ZodType<LinkAccountAgentRequest> = z.object({
   agent: z.string().trim().min(1).nullable(),
@@ -64,7 +68,9 @@ export function channelAccountsRoutes(deps: Pick<ApiDeps, "db" | "agentLoader">)
         let canonical: string | null = null;
         try {
           if (deps.agentLoader.has(agent)) canonical = deps.agentLoader.getCanonicalName(agent);
-        } catch {}
+        } catch (err) {
+          log.warn("agent lookup failed while linking an account", { agent, err });
+        }
         if (canonical === null) return c.json({ error: `Agent "${agent}" is not loaded.` }, 400);
         agent = canonical;
       }
