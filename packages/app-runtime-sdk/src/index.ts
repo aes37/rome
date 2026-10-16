@@ -1900,15 +1900,6 @@ export interface Channel {
   readonly name: string;
   readonly send: ChannelSend | null;
   readonly inbound: ChannelInbound | null;
-  /**
-   * The canonical id (`<app-id>:<local-name>`, `core:main` for main) of the
-   * agent linked to this channel, which answers its conversations. Null on a
-   * channel that takes a link but has none, or whose linked agent is not
-   * loaded, and such a channel answers nothing. Absent on a channel that takes
-   * no link, such as webchat or email, where main answers. Read it when a
-   * message arrives, since a relink changes it on the same channel.
-   */
-  readonly linkedAgent?: string | null;
 }
 
 /**
@@ -1923,6 +1914,19 @@ export interface ChannelMessageHookDeps {
   /** A live array: the host appends a channel added later, such as a second
    *  bot, in place. Read it at each `register()` rather than keep a copy. */
   channels: readonly Channel[];
+  /**
+   * Who answers on the channel named `channelName`, read when each message
+   * arrives, since a relink changes it on the same channel:
+   * - a canonical agent id (`<app-id>:<local-name>`, `core:main` for main):
+   *   that agent answers, whatever the conversation or group chose;
+   * - null: the channel takes a linked agent but has none, or that agent is
+   *   not loaded, so nothing answers;
+   * - undefined: the channel takes no linked agent, such as webchat or email,
+   *   and its conversations choose their agent, main by default.
+   * A host that predates linked agents passes no `linkedAgentOf`, which reads
+   * as undefined for every channel.
+   */
+  linkedAgentOf?: (channelName: string) => string | null | undefined;
 }
 
 export interface ChannelMessageHook {
