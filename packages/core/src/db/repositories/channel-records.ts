@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { isMainAgent, LINKABLE_SERVICES, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
+import { LINKABLE_SERVICES, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { isCoreMainAgentId } from "../../apps/artifact-id.js";
 import { platformOf } from "../../channels/platform.js";
 import { channels } from "../schema.js";
 import { inTransaction, type DrizzleDb, type DrizzleTx } from "../index.js";
@@ -85,9 +86,9 @@ function toRecord(row: typeof channels.$inferSelect): ChannelRecord {
  * Connection takes it back before a new id is minted.
  */
 export class ChannelRecordsRepository {
-  /** Channel id by Connection id, read on every port use. Every write
-   *  empties it, and nothing is cached while a transaction is open, so a
-   *  rolled-back write leaves no id behind. */
+  /** Channel id by Connection id, read on every port use. Every write that
+   *  moves a Connection empties it (a link moves none), and nothing is cached
+   *  while a transaction is open, so a rolled-back write leaves no id behind. */
   private readonly ids = new Map<string, string | null>();
 
   constructor(private readonly db: DrizzleDb) {}
@@ -199,7 +200,7 @@ export class ChannelRecordsRepository {
    * link; unlinking is always open.
    */
   link(id: string, requested: string | null): LinkOutcome {
-    const agent = requested !== null && isMainAgent(requested) ? MAIN_AGENT_ID : requested;
+    const agent = requested !== null && isCoreMainAgentId(requested) ? MAIN_AGENT_ID : requested;
     return this.db.transaction((tx) => {
       const row = tx.select().from(channels).where(eq(channels.id, id)).get();
       if (!row) throw new ChannelRecordNotFound(id);

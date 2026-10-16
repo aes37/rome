@@ -1,5 +1,6 @@
 // Accounts and their linked agents. An account is a channel, as the dashboard
-// shows it; one whose Connection was deleted is listed with no Connection. Vocabulary: docs/concepts/messaging.md#channels.
+// shows it; one whose Connection was deleted is listed with no Connection.
+// Vocabulary: docs/concepts/messaging.md#channels.
 // Invariants: docs/architecture/channels.md#linked-agents.
 
 import type {
@@ -7,7 +8,6 @@ import type {
   LinkAccountAgentRequest,
   LinkAccountAgentResult,
 } from "@rome/api-types/channel-accounts";
-import { isMainAgent, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -17,6 +17,7 @@ import {
   ChannelUnbacked,
   type ChannelRecord,
 } from "../../db/repositories/channel-records.js";
+import { isCoreMainAgentId } from "../../apps/artifact-id.js";
 import { isSameOriginMutationRequest } from "../../lib/mutation-origin.js";
 import type { ApiDeps } from "../deps.js";
 
@@ -56,18 +57,12 @@ export function channelAccountsRoutes(deps: Pick<ApiDeps, "db" | "agentLoader">)
       return c.json({ error: "Name an agent, or null to unlink." }, 400);
     }
     let agent = parsed.data.agent;
-    if (agent !== null) {
-      if (isMainAgent(agent)) {
-        agent = MAIN_AGENT_ID;
-      } else {
-        // getCanonicalName throws for an agent a reload removed after has().
-        let canonical: string | null = null;
-        try {
-          if (deps.agentLoader.has(agent)) canonical = deps.agentLoader.getCanonicalName(agent);
-        } catch {}
-        if (canonical === null) return c.json({ error: `Agent "${agent}" is not loaded.` }, 400);
-        agent = canonical;
+    // The repository stores main by its canonical id, so main skips the loader.
+    if (agent !== null && !isCoreMainAgentId(agent)) {
+      if (!deps.agentLoader.has(agent)) {
+        return c.json({ error: `Agent "${agent}" is not loaded.` }, 400);
       }
+      agent = deps.agentLoader.getCanonicalName(agent);
     }
     const id = c.req.param("id");
     try {

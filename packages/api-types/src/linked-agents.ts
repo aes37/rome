@@ -13,14 +13,7 @@ export const LINKABLE_SERVICES: ReadonlySet<string> = new Set([
   "telegram_user",
 ]);
 
-/** The canonical id of main, the id core stores when main is linked. */
+/** The canonical id of main, the id core stores when main is linked. Main is
+ *  linked to an account like any agent, but unlike any other agent it may be
+ *  linked to several accounts on one platform. */
 export const MAIN_AGENT_ID = "core:main";
-
-/** The ids main answers to. Main is linked to an account like any agent, and
- *  stored by `MAIN_AGENT_ID`. Unlike any other agent, it may be linked to
- *  several accounts on one platform. */
-export const MAIN_AGENT_IDS = ["main", MAIN_AGENT_ID] as const;
-
-export function isMainAgent(id: string): boolean {
-  return (MAIN_AGENT_IDS as readonly string[]).includes(id);
-}
