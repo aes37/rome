@@ -86,9 +86,9 @@ function toRecord(row: typeof channels.$inferSelect): ChannelRecord {
  * Connection takes it back before a new id is minted.
  */
 export class ChannelRecordsRepository {
-  /** Channel id by Connection id, read on every port use. Every write
-   *  empties it, and nothing is cached while a transaction is open, so a
-   *  rolled-back write leaves no id behind. */
+  /** Channel id by Connection id, read on every port use. Every write that
+   *  moves a Connection empties it (a link moves none), and nothing is cached
+   *  while a transaction is open, so a rolled-back write leaves no id behind. */
   private readonly ids = new Map<string, string | null>();
 
   constructor(private readonly db: DrizzleDb) {}
@@ -227,7 +227,6 @@ export class ChannelRecordsRepository {
         }
       }
       tx.update(channels).set({ agent }).where(eq(channels.id, id)).run();
-      this.ids.clear();
       return { channel: toRecord({ ...row, agent }), unlinkedFrom };
     });
   }
