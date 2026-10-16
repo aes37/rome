@@ -76,8 +76,10 @@ export default function ProjectsIndexPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   // The dialog stays open until the POST answers; a second Enter or click in
-  // that window would ask core to create the same project again.
+  // that window would ask core to create the same project again. The ref
+  // guards the same tick, and the state shows the dialog as busy.
   const submitting = useRef(false);
+  const [busy, setBusy] = useState(false);
   // Bumped on every close, so a create that answers after Cancel doesn't
   // carry the guardian into the project they backed out of.
   const dialogSession = useRef(0);
@@ -104,6 +106,7 @@ export default function ProjectsIndexPage() {
     }
     if (submitting.current) return;
     submitting.current = true;
+    setBusy(true);
     setCreateError(null);
     const session = dialogSession.current;
     try {
@@ -116,6 +119,7 @@ export default function ProjectsIndexPage() {
       toast.error(err instanceof Error ? err.message : t("projectsPage.createFailed"));
     } finally {
       submitting.current = false;
+      setBusy(false);
     }
   };
 
@@ -201,6 +205,7 @@ export default function ProjectsIndexPage() {
         confirmLabel={t("projectsPage.create")}
         cancelLabel={t("projectsPage.cancel")}
         error={createError}
+        busy={busy}
         icon={<FolderKanban className="h-4 w-4" aria-hidden />}
       />
     </Page>

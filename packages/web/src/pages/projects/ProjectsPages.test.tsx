@@ -81,6 +81,8 @@ const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     if (resolveGate) await resolveGate;
     if (resolveFails) return new Response("down", { status: 500 });
     const path = url.searchParams.get("path") ?? "";
+    // Core rejects a path that would leave the projects root.
+    if (path.split("/").includes("..")) return new Response("bad path", { status: 400 });
     return json({ type: rootEntries[path] ?? "missing", path });
   }
   if (url.pathname === "/api/projects/tree") {
@@ -93,6 +95,15 @@ const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
           path: entry,
           type,
         })),
+      );
+    }
+    if (path === "projects/crowded") {
+      // In the filesystem's order, not by name, and more than the panel shows.
+      return json(
+        Array.from({ length: 12 }, (_, i) => {
+          const name = `note-${String(12 - i).padStart(2, "0")}.md`;
+          return { name, path: `projects/crowded/${name}`, type: "file" };
+        }).concat([{ name: "zeta", path: "projects/crowded/zeta", type: "directory" }]),
       );
     }
     if (path === "projects/alpha") {
@@ -216,6 +227,41 @@ describe("Projects list", () => {
 
     await screen.findByText(/"pathname":"\/projects\/launch-plan"/);
     expect(createdProjects).toEqual(["launch-plan"]);
+  });
+
+  it("shows Create as busy while the project is being created", async () => {
+    let openGate = () => {};
+    createGate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+    const user = userEvent.setup();
+    renderAt("/projects");
+
+    await openCreateDialog(user);
+    await user.type(screen.getByLabelText("Project name"), "launch-plan");
+    const confirm = screen.getByRole("button", { name: "Create project" });
+    await user.click(confirm);
+
+    await rs.waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(true));
+    expect(confirm.getAttribute("aria-busy")).toBe("true");
+    openGate();
+    await screen.findByText(/"pathname":"\/projects\/launch-plan"/);
+  });
+
+  it("does not ask core for its project records again when the chats change", async () => {
+    renderAt("/projects");
+    await screen.findAllByRole("link");
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(
+        ([input]) => new URL(String(input), "http://localhost").pathname === pathname,
+      ).length;
+    const sessionReads = calls("/api/chat/sessions");
+    const recordReads = calls("/api/chat/projects");
+
+    emitSessionsChanged();
+
+    await rs.waitFor(() => expect(calls("/api/chat/sessions")).toBeGreaterThan(sessionReads));
+    expect(calls("/api/chat/projects")).toBe(recordReads);
   });
 
   it("narrows the cards to the projects whose name matches the search", async () => {
@@ -436,6 +482,30 @@ describe("Project page", () => {
 
     expect(await screen.findByText(/There's no project named “alpha\/nope”/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+  });
+
+  it("says a project is missing when core rejects its name, with no retry", async () => {
+    renderAt(`/projects/${encodeURIComponent("..")}`);
+
+    expect(await screen.findByText(/There's no project named “\.\.”/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("previews a project's files folders first, by name, and only the first ten", async () => {
+    extraRecords = [record("crowded")];
+    renderAt("/projects/crowded");
+
+    const files = await screen.findByRole("region", { name: "Files" });
+    await within(files).findByRole("link", { name: "zeta" });
+    const names = within(files)
+      .getAllByRole("link")
+      .map((link) => link.textContent)
+      .filter((name) => name !== "Open in Files");
+    expect(names).toEqual([
+      "zeta",
+      ...Array.from({ length: 9 }, (_, i) => `note-${String(i + 1).padStart(2, "0")}.md`),
+    ]);
+    expect(within(files).getByRole("link", { name: "Open in Files" })).toBeTruthy();
   });
 
   it("offers a retry when an unknown project's folder cannot be checked", async () => {

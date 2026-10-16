@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { createProject, listProjects, listSessions } from "@/lib/chat-api";
 import { DEFAULT_PROJECT_NAME } from "@/lib/chat-constants";
-import type { ChatSession, ProjectOption } from "@/lib/chat-types";
+import type { ChatSession, ProjectCatalog, ProjectOption } from "@/lib/chat-types";
 import { sessionActivityTime } from "@/lib/chat-session";
 import { useSessionsChanged } from "@/lib/session-events";
 
@@ -22,7 +22,13 @@ export interface ChatProject {
   activityAt: string | null;
 }
 
+// Two queries under one root: core's records change only when a project is
+// created, while the chats change on every sessions-changed event. Reading
+// `/chat/projects` also makes sure each record's folder exists, so it isn't
+// refetched for each chat event.
 const CHAT_PROJECTS_QUERY_KEY = ["chat-projects"] as const;
+const CATALOG_QUERY_KEY = ["chat-projects", "catalog"] as const;
+const SESSIONS_QUERY_KEY = ["chat-projects", "sessions"] as const;
 
 /** The project a chat belongs to. A chat with no folder runs in `default`. */
 export function projectPathForChat(chat: {
@@ -58,9 +64,7 @@ export function projectDisplayName(path: string, recordName?: string | null): st
   return recordName;
 }
 
-async function loadChatProjects(): Promise<ChatProject[]> {
-  const [catalog, sessions] = await Promise.all([listProjects(), listSessions("active")]);
-
+function buildChatProjects(catalog: ProjectCatalog, sessions: ChatSession[]): ChatProject[] {
   const byPath = new Map<string, ChatSession[]>();
   const names = new Map<string, string>();
   for (const project of catalog.projects) {
@@ -97,21 +101,33 @@ async function loadChatProjects(): Promise<ChatProject[]> {
 
 export function useChatProjects() {
   const queryClient = useQueryClient();
-  const query = useQuery({
-    queryKey: CHAT_PROJECTS_QUERY_KEY,
-    queryFn: loadChatProjects,
+  const catalog = useQuery({ queryKey: CATALOG_QUERY_KEY, queryFn: listProjects });
+  const sessions = useQuery({
+    queryKey: SESSIONS_QUERY_KEY,
+    queryFn: () => listSessions("active"),
   });
+  const projects = useMemo(
+    () => (catalog.data && sessions.data ? buildChatProjects(catalog.data, sessions.data) : null),
+    [catalog.data, sessions.data],
+  );
+  // After a create: the records and the chats.
   const invalidate = useCallback(
     () => queryClient.invalidateQueries({ queryKey: CHAT_PROJECTS_QUERY_KEY }),
     [queryClient],
   );
+  const { refetch: refetchCatalog } = catalog;
+  const { refetch: refetchSessions } = sessions;
+  const refetch = useCallback(
+    () => Promise.all([refetchCatalog(), refetchSessions()]),
+    [refetchCatalog, refetchSessions],
+  );
   useSessionsChanged(() => {
-    void invalidate();
+    void queryClient.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
   });
   return {
-    projects: query.data ?? null,
-    error: query.error,
-    refetch: query.refetch,
+    projects,
+    error: catalog.error ?? sessions.error,
+    refetch,
     invalidate,
   };
 }

@@ -55,17 +55,38 @@ function useProjectFiles(path: string, enabled: boolean) {
 // What the URL's path is under the projects root, read only when it names no
 // known project: a folder is an empty project, and a file is an old link from
 // when the Files page lived at /projects.
+// A 4xx means core rejected the path itself, such as `..`, so no such project
+// can exist and a retry can't help; only a 5xx or a network failure is a load
+// error worth retrying.
 function useProjectPathKind(path: string, enabled: boolean) {
   const { t } = useTranslation("common");
   return useQuery({
     queryKey: ["project-files", "resolve", path],
     enabled,
-    queryFn: () =>
-      fetchJson<ResolveResult>(
+    queryFn: async (): Promise<ResolveResult> => {
+      const response = await fetch(
         `/api/projects/resolve?path=${encodeURIComponent(`projects/${path}`)}`,
-        { fallback: t("projectsPage.loadError") },
-      ),
+        { credentials: "include", cache: "no-store" },
+      );
+      if (response.status >= 400 && response.status < 500) return { type: "missing", path };
+      if (!response.ok) throw new Error(t("projectsPage.loadError"));
+      return (await response.json()) as ResolveResult;
+    },
   });
+}
+
+// The files panel is a preview: folders first, then by name, and the first
+// few. "Open in Files" shows the rest.
+const FILES_PREVIEW_LIMIT = 10;
+
+function previewFiles(nodes: FileBrowserTreeNode[]): FileBrowserTreeNode[] {
+  return [...nodes]
+    .sort(
+      (a, b) =>
+        Number(b.type === "directory") - Number(a.type === "directory") ||
+        a.name.localeCompare(b.name),
+    )
+    .slice(0, FILES_PREVIEW_LIMIT);
 }
 
 // One project: its chats, newest first, with a way to start another in its
@@ -236,7 +257,7 @@ export default function ProjectDetailPage() {
                 {t("projectsPage.noFiles")}
               </p>
             ) : (
-              files.data.map((node) => {
+              previewFiles(files.data).map((node) => {
                 const relative = node.path.slice("projects/".length);
                 return (
                   <Link key={node.path} to={filesHrefForProject(relative)} className={ROW_CLASS}>
