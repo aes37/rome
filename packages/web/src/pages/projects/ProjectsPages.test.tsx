@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import i18n from "@/i18n";
 import type { ChatSession } from "@/lib/chat-types";
+import { emitSessionsChanged } from "@/lib/session-events";
 import ProjectDetailPage from "./ProjectDetailPage";
 import ProjectsIndexPage from "./ProjectsIndexPage";
 
@@ -38,6 +39,10 @@ const record = (path: string) => ({
 
 let sessions: ChatSession[] = [];
 let sessionsFail = false;
+// Tree paths whose read fails, as a transient server error would.
+const failingTrees = new Set<string>();
+// While set, the projects root listing waits on it.
+let rootGate: Promise<void> | null = null;
 const createdProjects: string[] = [];
 const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), "http://localhost");
@@ -58,11 +63,15 @@ const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     });
   }
   if (url.pathname === "/api/projects/tree") {
-    const path = url.searchParams.get("path");
+    const path = url.searchParams.get("path") ?? "";
+    if (failingTrees.has(path)) return new Response("down", { status: 500 });
     if (path === "projects") {
+      if (rootGate) await rootGate;
       return json([
         { name: "alpha", path: "projects/alpha", type: "directory" },
         { name: "empty", path: "projects/empty", type: "directory" },
+        // A folder with neither a record nor chats.
+        { name: "loose", path: "projects/loose", type: "directory" },
         { name: "todo.md", path: "projects/todo.md", type: "file" },
       ]);
     }
@@ -109,6 +118,8 @@ beforeAll(async () => {
 beforeEach(() => {
   rs.stubGlobal("fetch", fetchMock);
   sessionsFail = false;
+  failingTrees.clear();
+  rootGate = null;
   createdProjects.length = 0;
   sessions = [
     chat("a1", "Alpha older", "alpha", "2026-07-01T00:00:00.000Z"),
@@ -203,6 +214,71 @@ describe("Project page", () => {
     renderAt("/projects/todo.md?line=3");
 
     expect(await screen.findByText(/"pathname":"\/files\/todo.md"/)).toBeTruthy();
+  });
+
+  it("shows no project page while an old root-file link is being checked", async () => {
+    let openGate = () => {};
+    rootGate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+    renderAt("/projects/todo.md");
+
+    // The project list has loaded and names no `todo.md`; the root check is pending.
+    await rs.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) =>
+            new URL(String(input), "http://localhost").searchParams.get("path") === "projects",
+        ),
+      ).toBe(true),
+    );
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+    expect(screen.queryByText("todo.md")).toBeNull();
+
+    openGate();
+    expect(await screen.findByText(/"pathname":"\/files\/todo.md"/)).toBeTruthy();
+  });
+
+  it("keeps a folder's project page when its files fail to load", async () => {
+    failingTrees.add("projects/loose");
+    renderAt("/projects/loose");
+
+    const files = await screen.findByRole("region", { name: "Files" });
+    expect(await within(files).findByRole("alert")).toBeTruthy();
+    expect(within(files).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText(/There's no project/)).toBeNull();
+    expect(screen.getByText("No chats in this project yet")).toBeTruthy();
+  });
+
+  it("says a project is missing only when the projects root has no such folder", async () => {
+    renderAt("/projects/nowhere");
+
+    expect(await screen.findByText(/There's no project named “nowhere”/)).toBeTruthy();
+  });
+
+  it("offers a retry when the projects root cannot be read for an unknown project", async () => {
+    failingTrees.add("projects");
+    renderAt("/projects/loose");
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText(/There's no project/)).toBeNull();
+  });
+
+  it("does not reload the files when the chats change", async () => {
+    renderAt("/projects/alpha");
+    await screen.findByRole("link", { name: "brief.md" });
+    const calls = (pathname: string) =>
+      fetchMock.mock.calls.filter(
+        ([input]) => new URL(String(input), "http://localhost").pathname === pathname,
+      ).length;
+    const sessionReads = calls("/api/chat/sessions");
+    const treeReads = calls("/api/projects/tree");
+
+    emitSessionsChanged();
+
+    await rs.waitFor(() => expect(calls("/api/chat/sessions")).toBeGreaterThan(sessionReads));
+    expect(calls("/api/projects/tree")).toBe(treeReads);
   });
 
   it("offers a retry when the project's chats cannot be loaded", async () => {

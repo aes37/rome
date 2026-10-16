@@ -36,10 +36,12 @@ const ROW_CLASS =
 const CHAT_ROW_CLASS =
   "flex min-h-[var(--control-min-h)] items-center gap-3 rounded-8 border border-transparent px-4 py-3 text-ui text-foreground outline-none outline-1 outline-offset-0 outline-transparent transition hover:bg-surface-hover focus-visible:outline-solid focus-visible:outline-ring/50 dark:hover:bg-surface";
 
+// File queries keep their own key root: a sessions-changed refetch of the
+// project list has no reason to reload the trees.
 function useProjectFiles(path: string) {
   const { t } = useTranslation("common");
   return useQuery({
-    queryKey: ["chat-projects", "files", path],
+    queryKey: ["project-files", "tree", path],
     queryFn: () =>
       fetchJson<FileBrowserTreeNode[]>(
         `/api/projects/tree?path=${encodeURIComponent(`projects/${path}`)}&depth=1`,
@@ -54,7 +56,7 @@ function useProjectFiles(path: string) {
 function useProjectsRootEntries(enabled: boolean) {
   const { t } = useTranslation("common");
   return useQuery({
-    queryKey: ["chat-projects", "root-entries"],
+    queryKey: ["project-files", "root-entries"],
     enabled,
     queryFn: () =>
       fetchJson<FileBrowserTreeNode[]>("/api/projects/tree?path=projects&depth=1", {
@@ -91,10 +93,47 @@ export default function ProjectDetailPage() {
       />
     );
   }
-  // Wait for the root check before calling the project missing.
-  if (unknownProject && files.isError && rootEntries.isPending) return null;
+  // Until the URL is known to name a project, show no project page: an old
+  // link to a root file would offer New chat in a "project" that is a file.
+  if ((projects === null && !error) || (unknownProject && rootEntries.isPending)) {
+    return (
+      <Page aria-busy>
+        <PageHeader>
+          <PageHeading>
+            <Skeleton className="h-7 w-48" />
+          </PageHeading>
+        </PageHeader>
+      </Page>
+    );
+  }
 
-  if (unknownProject && files.isError) {
+  if (unknownProject && rootEntries.isError) {
+    return (
+      <Page>
+        <EmptyState role="alert">
+          <EmptyStateTitle>{t("projectsPage.loadError")}</EmptyStateTitle>
+          <EmptyStateAction>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void rootEntries.refetch()}
+            >
+              {t("projectsPage.retry")}
+            </Button>
+          </EmptyStateAction>
+        </EmptyState>
+      </Page>
+    );
+  }
+
+  // Only the projects root listing shows a project is missing; a failed read
+  // of its own files does not.
+  const folder = `projects/${projectPath.split("/")[0]}`;
+  const missing =
+    unknownProject &&
+    !rootEntries.data?.some((entry) => entry.type === "directory" && entry.path === folder);
+  if (missing) {
     return (
       <Page>
         <EmptyState role="status">
@@ -113,7 +152,7 @@ export default function ProjectDetailPage() {
   }
 
   // A folder with no record and no chats yet is an empty project.
-  const chats = projects === null ? null : (project?.chats ?? []);
+  const chats = project?.chats ?? [];
 
   return (
     <Page>
@@ -154,12 +193,6 @@ export default function ProjectDetailPage() {
                 </Button>
               </EmptyStateAction>
             </EmptyState>
-          ) : chats === null ? (
-            <div className="flex flex-col gap-1" aria-busy>
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-4/5" />
-              <Skeleton className="h-10 w-3/5" />
-            </div>
           ) : chats.length === 0 ? (
             <EmptyState role="status">
               <EmptyStateIcon>
@@ -201,9 +234,23 @@ export default function ProjectDetailPage() {
                 <Skeleton className="h-8 w-full" />
                 <Skeleton className="h-8 w-3/4" />
               </>
-            ) : files.isError || files.data.length === 0 ? (
+            ) : files.isError ? (
+              <div className="flex items-center justify-between gap-2 px-3 py-2" role="alert">
+                <p className="text-aux text-subtle-foreground">
+                  {t("projectsPage.filesLoadError")}
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void files.refetch()}
+                >
+                  {t("projectsPage.retry")}
+                </Button>
+              </div>
+            ) : files.data.length === 0 ? (
               <p className="px-3 py-2 text-aux text-subtle-foreground">
-                {files.isError ? t("projectsPage.filesLoadError") : t("projectsPage.noFiles")}
+                {t("projectsPage.noFiles")}
               </p>
             ) : (
               files.data.map((node) => {
