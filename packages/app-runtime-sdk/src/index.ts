@@ -1929,8 +1929,7 @@ export interface ChannelMessageHook {
    *  calls `unregister()` then `register()` at once, which drops events still
    *  waiting on the hook's existing subscriptions. A hook with neither
    *  `addChannels` nor `unregister()` hears those channels only after the
-   *  next restart. Subscribe before the first `await`, because the channel's
-   *  stream starts as soon as this call returns. */
+   *  next restart. */
   addChannels?(channels: readonly Channel[]): Promise<void>;
   /** Detach every subscription `register` took out, so
    * the host can swap in a replacement instance (e.g. after an app-keys
