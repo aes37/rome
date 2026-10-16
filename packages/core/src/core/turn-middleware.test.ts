@@ -8,6 +8,7 @@ import type { ArtifactRef } from "../apps/state.js";
 import type {
   AgentEvent,
   TurnMiddlewareContext,
+  TurnMiddlewareHook,
   TurnMiddlewareNext,
   TurnOutcome,
 } from "@rome-os/app-runtime";
@@ -140,6 +141,16 @@ describe("TurnMiddlewareChain", () => {
       return (await next()).status;
     };
     expect(typeof readStatus).toBe("function");
+  });
+
+  it("accepts a passthrough middleware that returns next()", () => {
+    const passthrough: TurnMiddlewareHook = {
+      order: 0,
+      async handle(_ctx, next) {
+        return next();
+      },
+    };
+    expect(passthrough.order).toBe(0);
   });
 
   it("lets a middleware rewrite the input before the terminal reads it", async () => {
@@ -289,7 +300,7 @@ describe("TurnMiddlewareChain", () => {
         order: 0,
         onError: "fail-closed",
         async handle(ctx, next) {
-          void next().catch(() => {});
+          void next();
         },
       }`,
     );
@@ -310,6 +321,106 @@ describe("TurnMiddlewareChain", () => {
     );
 
     await expect(chain.run(makeCtx(), async () => {}, completed)).rejects.toThrow("late failure");
+  });
+
+  it("reports an inner failure the middleware never looked at, however fast it came", async () => {
+    const busy = await createMiddlewareDir(
+      "unobserved",
+      `{
+        order: 0,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          void next();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        },
+      }`,
+    );
+    const failing = await createMiddlewareDir(
+      "unobserved-inner",
+      `{ order: 1, onError: "fail-closed", async handle() { throw new Error("fast failure"); } }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([hookRef("app.busy", busy), hookRef("app.fast", failing)]),
+    );
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(chain.run(makeCtx(), async () => {}, completed)).rejects.toThrow("fast failure");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+  });
+
+  it("leaves an inner failure to the middleware that caught what next() returned", async () => {
+    const catching = await createMiddlewareDir(
+      "observed",
+      `{
+        order: 0,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          void next().catch(() => ctx.emit({ type: "text", content: "caught" }));
+        },
+      }`,
+    );
+    const failing = await createMiddlewareDir(
+      "observed-inner",
+      `{
+        order: 1,
+        onError: "fail-closed",
+        async handle() {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          throw new Error("late failure");
+        },
+      }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([hookRef("app.catching", catching), hookRef("app.late", failing)]),
+    );
+
+    const emitted: AgentEvent[] = [];
+    await chain.run(makeCtx("main", emitted), async () => {}, completed);
+    expect(emitted).toEqual([{ type: "text", content: "caught" }]);
+  });
+
+  it.each([
+    ["then(onFulfilled)", "void next().then(() => {});"],
+    ["finally", "void next().finally(() => {});"],
+  ])("reports an inner failure behind %s as the middleware's own", async (_label, call) => {
+    const busy = await createMiddlewareDir(
+      "derived",
+      `{
+        order: 0,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          ${call}
+        },
+      }`,
+    );
+    const failing = await createMiddlewareDir(
+      "derived-inner",
+      `{ order: 1, onError: "fail-closed", async handle() { throw new Error("inner broke"); } }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([hookRef("app.busy", busy), hookRef("app.failing", failing)]),
+    );
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(chain.run(makeCtx(), async () => {}, completed)).rejects.toThrow("inner broke");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
   });
 
   it("waits for the layers a throwing middleware started before its error leaves", async () => {

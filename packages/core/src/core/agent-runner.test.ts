@@ -2429,6 +2429,21 @@ describe("AgentRunner", () => {
         );
       });
 
+      it("does not report a model turn that submitted an approval and finished as parked", async () => {
+        expectOutcome(
+          await outcomeOf([
+            {
+              type: "tool_result",
+              toolUseId: "tu-approval",
+              tool: "demo_action",
+              output: { pendingApproval: true },
+            },
+            { type: "result", content: "done" },
+          ]),
+          { status: "completed", suspended: false },
+        );
+      });
+
       it("waits for the model when an inner middleware does not await next()", async () => {
         // The model answers after the inner middleware has returned.
         class SlowProvider extends MockModelProvider {

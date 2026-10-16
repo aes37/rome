@@ -734,9 +734,10 @@ export interface TurnMiddlewareContext {
 export interface TurnOutcome {
   /** `interrupted` when the guardian stopped the turn, `error` when it failed,
    *  `completed` otherwise. */
-  status: "completed" | "interrupted" | "error";
-  /** The turn ended parked on a card that waits for the guardian: a question,
-   *  an approval, or a handoff. */
+  status: TurnEndEvent["status"];
+  /** The turn ended parked on a card that waits for the guardian, such as a
+   *  question or a handoff. Submitting an approval doesn't count, since the
+   *  model carries on with its turn. */
   suspended: boolean;
 }
 
@@ -754,7 +755,8 @@ export interface TurnMiddlewareHook {
    *  skips it and continues to `next()` so ordinary chat is never broken;
    *  `fail-closed` aborts the turn with an error event. */
   onError?: "fail-open" | "fail-closed";
-  handle(ctx: TurnMiddlewareContext, next: TurnMiddlewareNext): Promise<void>;
+  /** What it resolves with is ignored, so a passthrough can `return next()`. */
+  handle(ctx: TurnMiddlewareContext, next: TurnMiddlewareNext): Promise<unknown>;
 }
 
 export interface TurnMiddlewareHookDeps {
