@@ -29,12 +29,12 @@ function GoTo({ path }: { path: string }) {
   );
 }
 
-function renderSidebar(initialEntry: string) {
+function renderSidebar(initialEntry: string, { collapsed = false } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialEntry]}>
-        <AppGrid />
+        <AppGrid collapsed={collapsed} />
         <GoTo path="/people" />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -76,5 +76,18 @@ describe("sidebar fold", () => {
 
     const fold = screen.getByRole("navigation", { name: "More" });
     expect(within(fold).getByRole("link", { name: "People" })).toBeTruthy();
+  });
+
+  it("marks the current page in the rail's More menu", async () => {
+    renderSidebar("/memory", { collapsed: true });
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
+
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu).getByRole("menuitem", { name: "Memory" }).getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      within(menu).getByRole("menuitem", { name: "People" }).hasAttribute("aria-current"),
+    ).toBe(false);
   });
 });

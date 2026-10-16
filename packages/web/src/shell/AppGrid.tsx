@@ -529,14 +529,21 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
               <TooltipContent side="right">{t("sidebar.more")}</TooltipContent>
             </Tooltip>
             <DropdownMenuContent side="right" align="start">
-              {moreEntries.map((entry) => (
-                <DropdownMenuItem key={entry.id} asChild>
-                  <Link to={entry.href}>
-                    <entry.Icon className="h-4 w-4 shrink-0 text-subtle-foreground" aria-hidden />
-                    {t(entry.labelKey)}
-                  </Link>
-                </DropdownMenuItem>
-              ))}
+              {moreEntries.map((entry) => {
+                const active = isEntryActive(location.pathname, entry.href);
+                return (
+                  <DropdownMenuItem key={entry.id} asChild>
+                    <Link
+                      to={entry.href}
+                      aria-current={active ? "page" : undefined}
+                      className={active ? ACTIVE_CLASS : undefined}
+                    >
+                      <entry.Icon className="h-4 w-4 shrink-0 text-subtle-foreground" aria-hidden />
+                      {t(entry.labelKey)}
+                    </Link>
+                  </DropdownMenuItem>
+                );
+              })}
             </DropdownMenuContent>
           </DropdownMenu>
           {pinnedApps.length > 0 ? <Separator className="my-1 w-6" /> : null}

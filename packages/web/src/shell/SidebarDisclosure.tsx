@@ -11,7 +11,8 @@ interface SidebarDisclosureProps {
 // A divider that doubles as the toggle for the rows it folds: a sidebar zone
 // that folds spends no row of its own on a "Show more" label. It sits under the
 // zone, so opening it drops the divider below the revealed rows, and the whole
-// line is the hit target, not only the chevron.
+// line is the hit target, not only the chevron. On touch it grows to the
+// comfortable control height, with the line still centered.
 export function SidebarDisclosure({ expanded, onToggle, controls }: SidebarDisclosureProps) {
   const { t } = useTranslation("common");
   const label = expanded ? t("sidebar.showLess") : t("sidebar.showMore");
@@ -24,7 +25,7 @@ export function SidebarDisclosure({ expanded, onToggle, controls }: SidebarDiscl
         aria-expanded={expanded}
         aria-controls={expanded ? controls : undefined}
         onClick={onToggle}
-        className="group/disclosure flex h-6 w-full items-center gap-1 rounded-8 px-2 text-subtle-foreground outline-none outline-1 outline-offset-0 outline-transparent transition hover:text-foreground focus-visible:outline-solid focus-visible:outline-ring/50"
+        className="group/disclosure flex h-6 min-h-[var(--control-min-h)] w-full items-center gap-1 rounded-8 px-2 text-subtle-foreground outline-none outline-1 outline-offset-0 outline-transparent transition hover:text-foreground focus-visible:outline-solid focus-visible:outline-ring/50"
       >
         <span className="flex-1 border-t border-border-subtle transition group-hover/disclosure:border-border" />
         {/* The chevron reads as the control: it takes a button's hover fill
