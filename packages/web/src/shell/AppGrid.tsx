@@ -285,14 +285,12 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
     () => readMoreExpanded() || isMorePageActive(location.pathname),
   );
   const toggleMoreExpanded = useCallback(() => {
-    setMoreExpanded((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(SIDEBAR_MORE_EXPANDED_KEY, next ? "1" : "0");
-      } catch {}
-      return next;
-    });
-  }, []);
+    const next = !moreExpanded;
+    setMoreExpanded(next);
+    try {
+      localStorage.setItem(SIDEBAR_MORE_EXPANDED_KEY, next ? "1" : "0");
+    } catch {}
+  }, [moreExpanded]);
   const invalidateSettings = useInvalidateSettings();
   const invalidateApps = useInvalidateApps();
   // The Mac app has no tabs, and its shell hands every new-window request to

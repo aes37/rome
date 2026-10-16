@@ -45,12 +45,13 @@ import { useAppLifecycle } from "@/hooks/use-app-lifecycle";
 import { useLongPressMenu } from "@/hooks/use-long-press-menu";
 import { useSidebarPins } from "@/hooks/use-sidebar-pins";
 
-// First-party apps with nothing for the guardian to open from the launcher: the
-// assistant has no page, and browser automation's page is the agent's tooling.
-const UNLISTED_BUILTIN_APP_IDS: ReadonlySet<string> = new Set(["assistant", "browser-automation"]);
+// First-party apps with nothing for the guardian to open from the launcher: any
+// without a page (the server reports `hasFrontend`), and browser automation,
+// whose page is the agent's tooling. Its manifest can't say that yet.
+const UNLISTED_BUILTIN_APP_IDS: ReadonlySet<string> = new Set(["browser-automation"]);
 
 function isUnlistedBuiltin(app: InstalledAppCard): boolean {
-  return app.origin === "builtin" && UNLISTED_BUILTIN_APP_IDS.has(app.id);
+  return app.origin === "builtin" && (!app.hasFrontend || UNLISTED_BUILTIN_APP_IDS.has(app.id));
 }
 
 function isInFlight(phase: AppViewState): boolean {

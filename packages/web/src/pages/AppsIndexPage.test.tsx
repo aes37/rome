@@ -373,12 +373,21 @@ describe("AppsIndexPage reactivity", () => {
   it("lists no Rome pages, and leaves out the first-party apps with nothing to open", async () => {
     mockBackend({
       installed: [
-        installedCard({ id: "skills", displayName: "Skills", origin: "builtin" }),
+        installedCard({
+          id: "skills",
+          displayName: "Skills",
+          origin: "builtin",
+          hasFrontend: true,
+        }),
+        // No page to open, whatever its id.
         installedCard({ id: "assistant", displayName: "Assistant", origin: "builtin" }),
+        installedCard({ id: "inbox-agent", displayName: "Inbox Agent", origin: "builtin" }),
+        // Has a page, but it's the agent's tooling.
         installedCard({
           id: "browser-automation",
           displayName: "Browser Automation",
           origin: "builtin",
+          hasFrontend: true,
         }),
       ],
     });
@@ -392,6 +401,7 @@ describe("AppsIndexPage reactivity", () => {
     expect(screen.queryByText("Settings")).toBeNull();
     expect(screen.queryByText("Chat")).toBeNull();
     expect(screen.queryByText("Assistant")).toBeNull();
+    expect(screen.queryByText("Inbox Agent")).toBeNull();
     expect(screen.queryByText("Browser Automation")).toBeNull();
   });
 
@@ -402,6 +412,7 @@ describe("AppsIndexPage reactivity", () => {
           id: "shipped",
           displayName: "Shipped App",
           origin: "builtin",
+          hasFrontend: true,
           canUninstall: false,
           canPublish: false,
         }),
@@ -887,7 +898,12 @@ describe("AppsIndexPage search", () => {
       installed: [
         installedCard({ id: "weather", displayName: "Weather" }),
         installedCard({ id: "calendar", displayName: "Calendar" }),
-        installedCard({ id: "skills", displayName: "Skills", origin: "builtin" }),
+        installedCard({
+          id: "skills",
+          displayName: "Skills",
+          origin: "builtin",
+          hasFrontend: true,
+        }),
       ],
     });
 
@@ -922,6 +938,7 @@ describe("AppsIndexPage search", () => {
           id: "system",
           displayName: "System",
           origin: "builtin",
+          hasFrontend: true,
           canUninstall: false,
           canPublish: false,
         }),
