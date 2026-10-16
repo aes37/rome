@@ -41,9 +41,20 @@ let sessions: ChatSession[] = [];
 let sessionsFail = false;
 // Tree paths whose read fails, as a transient server error would.
 const failingTrees = new Set<string>();
-// While set, the projects root listing waits on it.
-let rootGate: Promise<void> | null = null;
+let resolveFails = false;
+// While set, resolving a path under the projects root waits on it.
+let resolveGate: Promise<void> | null = null;
+// What sits under the projects root, beside the folders core has records for.
+const rootEntries: Record<string, "directory" | "file"> = {
+  "projects/alpha": "directory",
+  "projects/empty": "directory",
+  // A folder with neither a record nor chats.
+  "projects/loose": "directory",
+  "projects/todo.md": "file",
+};
 const createdProjects: string[] = [];
+// While set, creating a project waits on it.
+let createGate: Promise<void> | null = null;
 const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), "http://localhost");
   if (url.pathname === "/api/chat/sessions") {
@@ -53,6 +64,7 @@ const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     if (init?.method === "POST") {
       const { name } = JSON.parse(String(init.body)) as { name: string };
       createdProjects.push(name);
+      if (createGate) await createGate;
       return json(record(name));
     }
     // Core's records: the folders made outside them, such as `src`, are not projects.
@@ -62,18 +74,23 @@ const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       projects: [record("alpha"), record("empty")],
     });
   }
+  if (url.pathname === "/api/projects/resolve") {
+    if (resolveGate) await resolveGate;
+    if (resolveFails) return new Response("down", { status: 500 });
+    const path = url.searchParams.get("path") ?? "";
+    return json({ type: rootEntries[path] ?? "missing", path });
+  }
   if (url.pathname === "/api/projects/tree") {
     const path = url.searchParams.get("path") ?? "";
     if (failingTrees.has(path)) return new Response("down", { status: 500 });
     if (path === "projects") {
-      if (rootGate) await rootGate;
-      return json([
-        { name: "alpha", path: "projects/alpha", type: "directory" },
-        { name: "empty", path: "projects/empty", type: "directory" },
-        // A folder with neither a record nor chats.
-        { name: "loose", path: "projects/loose", type: "directory" },
-        { name: "todo.md", path: "projects/todo.md", type: "file" },
-      ]);
+      return json(
+        Object.entries(rootEntries).map(([entry, type]) => ({
+          name: entry.slice("projects/".length),
+          path: entry,
+          type,
+        })),
+      );
     }
     if (path === "projects/alpha") {
       return json([
@@ -117,10 +134,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   rs.stubGlobal("fetch", fetchMock);
+  fetchMock.mockClear();
   sessionsFail = false;
   failingTrees.clear();
-  rootGate = null;
+  resolveFails = false;
+  resolveGate = null;
   createdProjects.length = 0;
+  createGate = null;
   sessions = [
     chat("a1", "Alpha older", "alpha", "2026-07-01T00:00:00.000Z"),
     chat("a2", "Alpha newest", "alpha", "2026-07-09T00:00:00.000Z"),
@@ -167,6 +187,24 @@ describe("Projects list", () => {
         ([input]) => new URL(String(input), "http://localhost").pathname === "/api/projects/file",
       ),
     ).toBe(false);
+  });
+
+  it("creates the project once when Create is pressed again while it is being created", async () => {
+    let openGate = () => {};
+    createGate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+    const user = userEvent.setup();
+    renderAt("/projects");
+
+    await user.click(await screen.findByRole("button", { name: "New project" }));
+    await user.type(screen.getByLabelText("Project name"), "launch-plan");
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+    openGate();
+
+    await screen.findByText(/"pathname":"\/projects\/launch-plan"/);
+    expect(createdProjects).toEqual(["launch-plan"]);
   });
 
   it("narrows the cards to the projects whose name matches the search", async () => {
@@ -218,17 +256,17 @@ describe("Project page", () => {
 
   it("shows no project page while an old root-file link is being checked", async () => {
     let openGate = () => {};
-    rootGate = new Promise((resolve) => {
+    resolveGate = new Promise((resolve) => {
       openGate = resolve;
     });
     renderAt("/projects/todo.md");
 
-    // The project list has loaded and names no `todo.md`; the root check is pending.
+    // The project list has loaded and names no `todo.md`; the path check is pending.
     await rs.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
           ([input]) =>
-            new URL(String(input), "http://localhost").searchParams.get("path") === "projects",
+            new URL(String(input), "http://localhost").pathname === "/api/projects/resolve",
         ),
       ).toBe(true),
     );
@@ -256,8 +294,15 @@ describe("Project page", () => {
     expect(await screen.findByText(/There's no project named “nowhere”/)).toBeTruthy();
   });
 
-  it("offers a retry when the projects root cannot be read for an unknown project", async () => {
-    failingTrees.add("projects");
+  it("checks a nested project's whole path, not just its top folder", async () => {
+    renderAt(`/projects/${encodeURIComponent("alpha/nope")}`);
+
+    expect(await screen.findByText(/There's no project named “alpha\/nope”/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+  });
+
+  it("offers a retry when an unknown project's folder cannot be checked", async () => {
+    resolveFails = true;
     renderAt("/projects/loose");
 
     expect(await screen.findByRole("alert")).toBeTruthy();
@@ -281,12 +326,18 @@ describe("Project page", () => {
     expect(calls("/api/projects/tree")).toBe(treeReads);
   });
 
-  it("offers a retry when the project's chats cannot be loaded", async () => {
+  it("offers only a retry when the projects cannot be loaded", async () => {
     sessionsFail = true;
-    renderAt("/projects/alpha");
+    renderAt("/projects/todo.md");
 
-    const chats = await screen.findByRole("region", { name: "Chats" });
-    expect(await within(chats).findByRole("alert")).toBeTruthy();
-    expect(within(chats).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+    expect(screen.queryByText("todo.md")).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) => new URL(String(input), "http://localhost").pathname === "/api/projects/tree",
+      ),
+    ).toBe(false);
   });
 });

@@ -12,8 +12,8 @@ import { WorkspaceStoreContext } from "@/pages/free/workspace-store";
 // two link shapes the agent emits lives here, and everything else falls through
 // to the default react-router link.
 //
-//   /projects/<project>/<path> or an absolute same-origin form
-//                              → open the projects panel + select the file
+//   /projects/<project>/<path>, /files/<project>/<path>, or an absolute
+//   same-origin form           → open the projects panel + select the file
 //                                (reuses the same follow signal ChatWidget
 //                                publishes when an agent links a file).
 //   /apps/<appId>[/<route>][?q]  → open that app's workspace tile, preserving
@@ -25,6 +25,14 @@ import { WorkspaceStoreContext } from "@/pages/free/workspace-store";
 
 function isProjectsHref(href: string): boolean {
   return href === "/projects" || href.startsWith("/projects/");
+}
+
+// `/files` is the Files page's route for the same `projects` root, so its
+// links address the same files as `/projects` ones.
+function filesHrefToProjectsHref(href: string): string | null {
+  return href === "/files" || href.startsWith("/files/")
+    ? `/projects${href.slice("/files".length)}`
+    : null;
 }
 
 // Return the raw path+query+hash of an href that addresses a `/projects` route
@@ -57,7 +65,8 @@ function getProjectsRouteHref(href: string): string | null {
   const rawPath = getInternalRawPath(href);
   if (rawPath === null) return null;
   const filePath = stripQueryAndFragment(rawPath);
-  return isProjectsHref(filePath) ? filePath : null;
+  if (isProjectsHref(filePath)) return filePath;
+  return filesHrefToProjectsHref(filePath);
 }
 
 // Drop everything from the first literal `?` or `#`. Operates on the raw

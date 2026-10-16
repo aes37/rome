@@ -14,6 +14,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDocumentTitle } from "@/hooks/use-document-title";
 import { filesHrefForProject, useChatProjects } from "@/hooks/use-chat-projects";
+import type { ResolveResult } from "@/components/file-browser/store/types";
 import type { FileBrowserTreeNode } from "@/lib/file-browser-tree";
 import { fetchJson } from "@/lib/fetch-json";
 import { relativeTime } from "@/lib/routine-language";
@@ -38,10 +39,11 @@ const CHAT_ROW_CLASS =
 
 // File queries keep their own key root: a sessions-changed refetch of the
 // project list has no reason to reload the trees.
-function useProjectFiles(path: string) {
+function useProjectFiles(path: string, enabled: boolean) {
   const { t } = useTranslation("common");
   return useQuery({
     queryKey: ["project-files", "tree", path],
+    enabled,
     queryFn: () =>
       fetchJson<FileBrowserTreeNode[]>(
         `/api/projects/tree?path=${encodeURIComponent(`projects/${path}`)}&depth=1`,
@@ -50,18 +52,19 @@ function useProjectFiles(path: string) {
   });
 }
 
-// The top level of the projects root, read only when the URL names no known
-// project: the Files page used to live at /projects, so an old link can name a
-// file there.
-function useProjectsRootEntries(enabled: boolean) {
+// What the URL's path is under the projects root, read only when it names no
+// known project: a folder is an empty project, and a file is an old link from
+// when the Files page lived at /projects.
+function useProjectPathKind(path: string, enabled: boolean) {
   const { t } = useTranslation("common");
   return useQuery({
-    queryKey: ["project-files", "root-entries"],
+    queryKey: ["project-files", "resolve", path],
     enabled,
     queryFn: () =>
-      fetchJson<FileBrowserTreeNode[]>("/api/projects/tree?path=projects&depth=1", {
-        fallback: t("projectsPage.filesLoadError"),
-      }),
+      fetchJson<ResolveResult>(
+        `/api/projects/resolve?path=${encodeURIComponent(`projects/${path}`)}`,
+        { fallback: t("projectsPage.loadError") },
+      ),
   });
 }
 
@@ -73,19 +76,17 @@ export default function ProjectDetailPage() {
   const location = useLocation();
   const { projectPath = "" } = useParams<{ projectPath: string }>();
   const { projects, error, refetch } = useChatProjects();
-  const files = useProjectFiles(projectPath);
   const project = projects?.find((candidate) => candidate.path === projectPath) ?? null;
   const unknownProject = projects !== null && project === null;
-  const rootEntries = useProjectsRootEntries(unknownProject);
+  const pathKind = useProjectPathKind(projectPath, unknownProject);
+  const isFolder = project !== null || pathKind.data?.type === "directory";
+  const files = useProjectFiles(projectPath, isFolder);
   const name = project?.name ?? projectPath;
   useDocumentTitle(name);
 
   const startChat = () => navigate("/chat", { state: { projectPath } });
 
-  const isRootFile = rootEntries.data?.some(
-    (entry) => entry.type === "file" && entry.path === `projects/${projectPath}`,
-  );
-  if (isRootFile) {
+  if (pathKind.data?.type === "file") {
     return (
       <Navigate
         to={`${filesHrefForProject(projectPath)}${location.search}${location.hash}`}
@@ -93,9 +94,26 @@ export default function ProjectDetailPage() {
       />
     );
   }
-  // Until the URL is known to name a project, show no project page: an old
-  // link to a root file would offer New chat in a "project" that is a file.
-  if ((projects === null && !error) || (unknownProject && rootEntries.isPending)) {
+
+  // Until the URL is known to name a project folder, show no project page: an
+  // old link to a root file would offer New chat in a "project" that is a file.
+  const loadFailed = (error && projects === null) || (unknownProject && pathKind.isError);
+  if (loadFailed) {
+    const retry = () => void (projects === null ? refetch() : pathKind.refetch());
+    return (
+      <Page>
+        <EmptyState role="alert">
+          <EmptyStateTitle>{t("projectsPage.loadError")}</EmptyStateTitle>
+          <EmptyStateAction>
+            <Button type="button" variant="outline" size="sm" onClick={retry}>
+              {t("projectsPage.retry")}
+            </Button>
+          </EmptyStateAction>
+        </EmptyState>
+      </Page>
+    );
+  }
+  if (!isFolder && (projects === null || pathKind.isPending)) {
     return (
       <Page aria-busy>
         <PageHeader>
@@ -107,33 +125,7 @@ export default function ProjectDetailPage() {
     );
   }
 
-  if (unknownProject && rootEntries.isError) {
-    return (
-      <Page>
-        <EmptyState role="alert">
-          <EmptyStateTitle>{t("projectsPage.loadError")}</EmptyStateTitle>
-          <EmptyStateAction>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void rootEntries.refetch()}
-            >
-              {t("projectsPage.retry")}
-            </Button>
-          </EmptyStateAction>
-        </EmptyState>
-      </Page>
-    );
-  }
-
-  // Only the projects root listing shows a project is missing; a failed read
-  // of its own files does not.
-  const folder = `projects/${projectPath.split("/")[0]}`;
-  const missing =
-    unknownProject &&
-    !rootEntries.data?.some((entry) => entry.type === "directory" && entry.path === folder);
-  if (missing) {
+  if (!isFolder) {
     return (
       <Page>
         <EmptyState role="status">
@@ -184,16 +176,7 @@ export default function ProjectDetailPage() {
               <SectionTitle id="project-chats-heading">{t("projectsPage.chats")}</SectionTitle>
             </SectionHeading>
           </SectionHeader>
-          {error && projects === null ? (
-            <EmptyState role="alert">
-              <EmptyStateTitle>{t("projectsPage.loadError")}</EmptyStateTitle>
-              <EmptyStateAction>
-                <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
-                  {t("projectsPage.retry")}
-                </Button>
-              </EmptyStateAction>
-            </EmptyState>
-          ) : chats.length === 0 ? (
+          {chats.length === 0 ? (
             <EmptyState role="status">
               <EmptyStateIcon>
                 <MessageSquare className="h-5 w-5" aria-hidden />

@@ -1,5 +1,5 @@
 import { FolderKanban, Plus, Search } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -75,6 +75,9 @@ export default function ProjectsIndexPage() {
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // The dialog stays open until the POST answers; a second Enter or click in
+  // that window would ask core to create the same project again.
+  const submitting = useRef(false);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visible =
@@ -95,6 +98,8 @@ export default function ProjectsIndexPage() {
       setCreateError(t("projectsPage.nameTaken", { name }));
       return;
     }
+    if (submitting.current) return;
+    submitting.current = true;
     try {
       const path = await createChatProject(name);
       closeCreate();
@@ -102,6 +107,8 @@ export default function ProjectsIndexPage() {
       navigate(projectHref(path));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("projectsPage.createFailed"));
+    } finally {
+      submitting.current = false;
     }
   };
 
