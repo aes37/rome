@@ -24,7 +24,7 @@ import { createAgentTurnStreamRegistry } from "./agent-turn-stream-registry.js";
 import { createSubagentExecutionService } from "./subagent-execution.js";
 import type { AgentEvent } from "../types.js";
 import { join } from "node:path";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { actionExecutionContext } from "../actions/context.js";
 import type { AppCatalog } from "../apps/catalog.js";
@@ -2300,6 +2300,101 @@ describe("AgentRunner", () => {
         }),
       ]);
       expect(events.at(-1)).toMatchObject({ type: "turn_end", status: "error" });
+    });
+
+    describe("the outcome next() resolves with", () => {
+      // A real chain with one loaded middleware that records what next()
+      // resolves with, so the chain's own next() is what is under test.
+      async function recordingChain(): Promise<{ chain: TurnMiddlewareChain; dir: string }> {
+        const dir = await mkdtemp(join(tmpdir(), "rome-turnmw-outcome-"));
+        await writeFile(
+          join(dir, "index.js"),
+          `import { appendFile } from "node:fs/promises";
+          export function createHook() {
+            return {
+              order: 0,
+              async handle(ctx, next) {
+                const outcome = await next();
+                await appendFile(${JSON.stringify(join(dir, "outcomes.jsonl"))}, JSON.stringify(outcome) + "\\n");
+              },
+            };
+          }\n`,
+          "utf-8",
+        );
+        const chain = createTurnMiddlewareChain();
+        const failures = await chain.loadFromCatalog({
+          get: () => null,
+          listArtifacts: (kind: string) =>
+            kind === "hook"
+              ? [
+                  {
+                    kind: "hook",
+                    publicName: "turn-middleware",
+                    aliases: [],
+                    ownerType: "app",
+                    ownerId: "app.outcome",
+                    absolutePath: dir,
+                  },
+                ]
+              : [],
+        } as unknown as AppCatalog);
+        expect(failures).toEqual([]);
+        return { chain, dir };
+      }
+
+      async function outcomesIn(dir: string): Promise<unknown[]> {
+        const raw = await readFile(join(dir, "outcomes.jsonl"), "utf-8").catch(() => "");
+        return raw
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as unknown);
+      }
+
+      async function outcomeOf(turnEvents: AgentEvent[]): Promise<unknown> {
+        mockProvider = new MockModelProvider([turnEvents]);
+        const { chain, dir } = await recordingChain();
+        try {
+          const session = await openMiddlewareSession(chain);
+          await collectMessages(session.sendTurn({ prompt: "hi" }).events);
+          // The middleware resumes after the turn's events have ended.
+          let outcomes: unknown[] = [];
+          await rs.waitFor(async () => {
+            outcomes = await outcomesIn(dir);
+            expect(outcomes).toHaveLength(1);
+          });
+          return outcomes[0];
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      }
+
+      it("reports a model turn that completes", async () => {
+        expect(await outcomeOf([{ type: "result", content: "done" }])).toEqual({
+          status: "completed",
+          suspended: false,
+        });
+      });
+
+      it("reports a model turn that fails", async () => {
+        expect(await outcomeOf([{ type: "error", error: "provider down" }])).toEqual({
+          status: "error",
+          suspended: false,
+        });
+      });
+
+      it("reports a model turn parked on a card", async () => {
+        expect(
+          await outcomeOf([
+            {
+              type: "tool_result",
+              toolUseId: "tu-park",
+              tool: "ask_question",
+              output: { pendingInteraction: true },
+            },
+            { type: "result", content: "" },
+          ]),
+        ).toEqual({ status: "completed", suspended: true });
+      });
     });
 
     it.each([

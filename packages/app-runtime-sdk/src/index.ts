@@ -727,9 +727,21 @@ export interface TurnMiddlewareContext {
   meta: { synthetic?: boolean };
 }
 
+/** How the turn behind `next()` ended, whether the model or an inner
+ *  middleware produced it. */
+export interface TurnOutcome {
+  /** `interrupted` when the guardian stopped the turn, `error` when it failed,
+   *  `completed` otherwise. */
+  status: "completed" | "interrupted" | "error";
+  /** The turn ended parked on a card that waits for the guardian: a question,
+   *  an approval, or a handoff. */
+  suspended: boolean;
+}
+
 /** Continue the onion: rewrite-then-continue and post-process both call this;
- *  a short-circuiting middleware simply never does. */
-export type TurnMiddlewareNext = () => Promise<void>;
+ *  a short-circuiting middleware simply never does. Resolves once the inner
+ *  turn has ended, with how it ended. */
+export type TurnMiddlewareNext = () => Promise<TurnOutcome>;
 
 export interface TurnMiddlewareHook {
   /** Lowest order runs furthest out; the model layer is always innermost. */
