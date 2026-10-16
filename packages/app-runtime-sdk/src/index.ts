@@ -1900,6 +1900,15 @@ export interface Channel {
   readonly name: string;
   readonly send: ChannelSend | null;
   readonly inbound: ChannelInbound | null;
+  /**
+   * The canonical id (`<app-id>:<local-name>`, `core:main` for main) of the
+   * agent linked to this channel, which answers its conversations. Null on a
+   * channel that takes a link but has none, or whose linked agent is not
+   * loaded, and such a channel answers nothing. Absent on a channel that takes
+   * no link, such as webchat or email, where main answers. Read it when a
+   * message arrives, since a relink changes it on the same channel.
+   */
+  readonly linkedAgent?: string | null;
 }
 
 /**
