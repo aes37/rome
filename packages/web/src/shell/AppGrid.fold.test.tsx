@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, rs } from "@rst
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, useNavigate } from "react-router-dom";
 import i18n from "@/i18n";
 import { AppGrid } from "./AppGrid";
@@ -59,7 +60,7 @@ afterEach(() => {
 describe("sidebar fold", () => {
   it("reaches the Browser from the fold", async () => {
     renderSidebar("/chat");
-    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show more pages" }));
 
     const fold = screen.getByRole("navigation", { name: "More" });
     expect(within(fold).getByRole("link", { name: "Browser" }).getAttribute("href")).toBe(
@@ -69,13 +70,38 @@ describe("sidebar fold", () => {
 
   it("reopens when the guardian moves to another of its pages", async () => {
     renderSidebar("/memory");
-    await userEvent.click(screen.getByRole("button", { name: "Show less" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show fewer pages" }));
     expect(screen.queryByRole("navigation", { name: "More" })).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Go to /people" }));
 
     const fold = screen.getByRole("navigation", { name: "More" });
     expect(within(fold).getByRole("link", { name: "People" })).toBeTruthy();
+  });
+
+  it("starts open on one of its pages, before any effect runs", () => {
+    localStorage.setItem("rome-sidebar-more-expanded", "0");
+    // Server rendering runs no effects, so this is the markup of the first
+    // paint.
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/memory"]}>
+          <AppGrid />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(markup).toContain('id="sidebar-more"');
+  });
+
+  it("points the toggle at the rows only while they are in the page", async () => {
+    renderSidebar("/chat");
+    const toggle = screen.getByRole("button", { name: "Show more pages" });
+    expect(toggle.hasAttribute("aria-controls")).toBe(false);
+
+    await userEvent.click(toggle);
+    expect(
+      screen.getByRole("button", { name: "Show fewer pages" }).getAttribute("aria-controls"),
+    ).toBe("sidebar-more");
   });
 
   it("marks the current page in the rail's More menu", async () => {

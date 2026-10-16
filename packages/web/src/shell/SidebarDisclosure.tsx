@@ -1,11 +1,14 @@
 import { ChevronDown } from "lucide-react";
-import { useTranslation } from "react-i18next";
 
 interface SidebarDisclosureProps {
   expanded: boolean;
   onToggle: () => void;
-  /** Id of the list the divider reveals, once it is rendered. */
+  /** Id of the list the divider reveals, while that list is in the DOM. */
   controls?: string;
+  /** What the toggle does in each state. The sidebar can show two folds at
+   * once, so each names its own rows rather than a bare "Show more". */
+  showLabel: string;
+  hideLabel: string;
 }
 
 // A divider that doubles as the toggle for the rows it folds: a sidebar zone
@@ -13,9 +16,14 @@ interface SidebarDisclosureProps {
 // zone, so opening it drops the divider below the revealed rows, and the whole
 // line is the hit target, not only the chevron. On touch it grows to the
 // comfortable control height, with the line still centered.
-export function SidebarDisclosure({ expanded, onToggle, controls }: SidebarDisclosureProps) {
-  const { t } = useTranslation("common");
-  const label = expanded ? t("sidebar.showLess") : t("sidebar.showMore");
+export function SidebarDisclosure({
+  expanded,
+  onToggle,
+  controls,
+  showLabel,
+  hideLabel,
+}: SidebarDisclosureProps) {
+  const label = expanded ? hideLabel : showLabel;
   return (
     <div className="px-3">
       <button
@@ -23,7 +31,7 @@ export function SidebarDisclosure({ expanded, onToggle, controls }: SidebarDiscl
         aria-label={label}
         title={label}
         aria-expanded={expanded}
-        aria-controls={expanded ? controls : undefined}
+        aria-controls={controls}
         onClick={onToggle}
         className="group/disclosure flex h-6 min-h-[var(--control-min-h)] w-full items-center gap-1 rounded-8 px-2 text-subtle-foreground outline-none outline-1 outline-offset-0 outline-transparent transition hover:text-foreground focus-visible:outline-solid focus-visible:outline-ring/50"
       >

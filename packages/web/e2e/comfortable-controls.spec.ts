@@ -43,7 +43,7 @@ for (const { width, height, hasTouch } of [
       if (width < 768) {
         await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
         // Activity sits under the sidebar fold, which opens on its pages.
-        const fold = page.getByRole("button", { name: "Show less", exact: true });
+        const fold = page.getByRole("button", { name: "Show fewer pages", exact: true });
         expect((await fold.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       }
       // The wide sidebar names the button after the guardian ("Rome Demo, Guardian,

@@ -137,11 +137,14 @@ describe("Recent zone, expanded sidebar", () => {
 
     // The toggle is the divider closing the zone, so it sits just after the list.
     const divider = zone.nextElementSibling as HTMLElement;
-    const toggle = within(divider).getByRole("button", { name: "Show more" });
+    const toggle = within(divider).getByRole("button", { name: "Show more recent apps" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // The pages fold above shows at the same time, so each toggle names its
+    // own rows and a screen reader never hears two bare "Show more" buttons.
+    expect(screen.getByRole("button", { name: "Show more pages" })).not.toBe(toggle);
     await user.click(toggle);
     expect(within(zone).getAllByRole("link")).toHaveLength(4);
-    expect(within(divider).getByRole("button", { name: "Show less" })).toBeTruthy();
+    expect(within(divider).getByRole("button", { name: "Show fewer recent apps" })).toBeTruthy();
     expect(toggle.getAttribute("aria-controls")).toBe(zone.id);
 
     first.unmount();

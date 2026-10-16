@@ -137,6 +137,8 @@ export function RecentAppsZone<T extends RecentSidebarApp>({
           expanded={expanded}
           onToggle={() => setExpanded((prev) => !prev)}
           controls="sidebar-recent-apps"
+          showLabel={t("sidebar.showMoreRecentApps")}
+          hideLabel={t("sidebar.showFewerRecentApps")}
         />
       ) : (
         <SidebarDivider />

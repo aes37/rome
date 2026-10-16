@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import type { ComponentType } from "react";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { AppOrigin, InstalledAppCard } from "@rome/api-types/apps";
@@ -256,6 +256,10 @@ function builtinEntries(ids: readonly string[]): BuiltinNavEntry[] {
   return ids.flatMap((id) => APP_NAV.find((entry) => entry.id === id) ?? []);
 }
 
+function isMorePageActive(pathname: string): boolean {
+  return builtinEntries(SIDEBAR_MORE_IDS).some((b) => isEntryActive(pathname, b.href));
+}
+
 interface AppGridProps {
   /** Icon-rail rendering for the collapsed sidebar: entries become
    *  tooltip-labelled tiles and the edit affordances disappear. */
@@ -274,7 +278,11 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
   const [installedApps, setInstalledApps] =
     useState<(InstalledAppCard | CachedApp)[]>(readLocalApps);
   const [editing, setEditing] = useState(false);
-  const [moreExpanded, setMoreExpanded] = useState(readMoreExpanded);
+  // A first load on one of the fold's pages starts open, so the fold never
+  // paints shut and then jumps open.
+  const [moreExpanded, setMoreExpanded] = useState(
+    () => readMoreExpanded() || isMorePageActive(location.pathname),
+  );
   const toggleMoreExpanded = useCallback(() => {
     setMoreExpanded((prev) => {
       const next = !prev;
@@ -460,11 +468,12 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
 
   const fixedEntries = builtinEntries(SIDEBAR_FIXED_IDS);
   const moreEntries = builtinEntries(SIDEBAR_MORE_IDS);
-  const moreActive = moreEntries.some((b) => isEntryActive(location.pathname, b.href));
+  const moreActive = isMorePageActive(location.pathname);
   // Arriving on one of the group's pages opens the group, so the active row is
   // never hidden behind the fold. It reopens on each such arrival, including a
-  // move between two of its pages. The guardian can still fold it afterwards.
-  useEffect(() => {
+  // move between two of its pages, before the browser paints. The guardian can
+  // still fold it afterwards.
+  useLayoutEffect(() => {
     if (moreActive) setMoreExpanded(true);
   }, [moreActive, location.pathname]);
 
@@ -672,7 +681,9 @@ export function AppGrid({ collapsed, onSearch }: AppGridProps = {}) {
       <SidebarDisclosure
         expanded={moreExpanded}
         onToggle={toggleMoreExpanded}
-        controls="sidebar-more"
+        controls={moreExpanded ? "sidebar-more" : undefined}
+        showLabel={t("sidebar.showMorePages")}
+        hideLabel={t("sidebar.showFewerPages")}
       />
 
       <div className="flex items-center justify-between px-5 pb-1 pt-1">
