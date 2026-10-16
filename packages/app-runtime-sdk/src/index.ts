@@ -734,7 +734,7 @@ export interface TurnMiddlewareContext {
 export interface TurnOutcome {
   /** `interrupted` when the guardian stopped the turn, `error` when it failed,
    *  `completed` otherwise. */
-  status: "completed" | "interrupted" | "error";
+  status: TurnEndEvent["status"];
   /** The turn ended parked on a card that waits for the guardian: a question,
    *  an approval, or a handoff. */
   suspended: boolean;

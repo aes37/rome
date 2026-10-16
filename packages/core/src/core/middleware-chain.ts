@@ -8,6 +8,40 @@ import { loadAppHook } from "./hook-loader.js";
 const log = createLogger("middleware-chain");
 
 /**
+ * What a middleware's next() returns: a thenable that records whether the
+ * middleware attached a handler to it. The chain reports an inner failure as
+ * the middleware's own only when it never did. A native promise can't record
+ * this, because `await` on one skips its `then`. The wrapped promise's own
+ * rejection is always marked handled, since the chain surfaces it instead.
+ */
+class ObservedResult<T> implements PromiseLike<T> {
+  observed = false;
+  readonly [Symbol.toStringTag] = "Promise";
+
+  constructor(private readonly promise: Promise<T>) {
+    promise.catch(() => {});
+  }
+
+  then<A = T, B = never>(
+    onFulfilled?: ((value: T) => A | PromiseLike<A>) | null,
+    onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
+  ): Promise<A | B> {
+    this.observed = true;
+    return this.promise.then(onFulfilled, onRejected);
+  }
+
+  catch<B = never>(onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<T | B> {
+    this.observed = true;
+    return this.promise.catch(onRejected);
+  }
+
+  finally(onFinally?: (() => void) | null): Promise<T> {
+    this.observed = true;
+    return this.promise.finally(onFinally);
+  }
+}
+
+/**
  * The generic onion-middleware mechanism. A middleware kind is a code seam that
  * *wraps* a single operation with `next()` and a fixed innermost terminal — as
  * opposed to a fire-and-forget lifecycle hook (those stay in their own
@@ -128,19 +162,18 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
         const mw = chain[i];
         let nextCalled = false;
         let inner: Promise<void> | undefined;
-        let innerSettled = false;
-        const next = async (): Promise<Outcome> => {
+        let result: ObservedResult<Outcome> | undefined;
+        const next = (): Promise<Outcome> => {
           if (nextCalled) {
-            throw new Error(`${hookName} middleware (${mw.appId}) called next() more than once`);
+            return Promise.reject(
+              new Error(`${hookName} middleware (${mw.appId}) called next() more than once`),
+            );
           }
           nextCalled = true;
-          inner = dispatch(i + 1);
-          try {
-            await inner;
-          } finally {
-            innerSettled = true;
-          }
-          return (await readOutcome?.()) as Outcome;
+          const started = dispatch(i + 1);
+          inner = started;
+          result = new ObservedResult(started.then(async () => (await readOutcome?.()) as Outcome));
+          return result as unknown as Promise<Outcome>;
         };
         try {
           await wrapHookSpan(
@@ -148,12 +181,17 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
             { "hook.app_id": mw.appId, "hook.order": mw.hook.order },
             () => mw.hook.handle(ctx, next),
           );
-          // A middleware that calls next() without awaiting it returns while
-          // the layers inside it still run. Its layer ends when theirs do, and
-          // their failure is its own, as if it had awaited. One that returns
-          // after they finished has seen how they ended, so returning normally
-          // means it handled any failure, as `try { await next() } catch` does.
-          if (!innerSettled) await inner;
+          // A middleware's layer ends only once the layers its next() started
+          // have ended, even when it didn't await next(). Their failure is its
+          // own unless it attached a handler to what next() returned (await,
+          // then, catch or finally), as `try { await next() } catch` does.
+          if (inner) {
+            const failure = await inner.then(
+              () => undefined,
+              (err: unknown) => ({ err }),
+            );
+            if (failure && !result?.observed) throw failure.err;
+          }
         } catch (err) {
           // Its error leaves this layer only once the layers it started have
           // ended, so no outer next() resolves while they still run.
