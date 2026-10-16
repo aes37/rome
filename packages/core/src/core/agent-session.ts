@@ -1916,9 +1916,10 @@ interface TurnSink {
   pendingSubagentToolUses: Map<string, Extract<AgentEvent, { type: "tool_use" }>>;
   emittedSubagentStarts: Set<string>;
   subagentLinksCleared: boolean;
-  /** A schema-bound turn is terminal-only and cannot be resumed after a parked action. */
-  outputSchemaSuspended: boolean;
-  /** A tool result parked the turn on a card that waits for the guardian. */
+  /**
+   * A tool result parked the turn on a card that waits for the guardian. A
+   * schema-bound turn is terminal-only, so its result then fails the schema.
+   */
   suspended: boolean;
   /** The status the turn_end bracket reported, once it is published. */
   endStatus?: TurnOutcome["status"];
@@ -2349,7 +2350,6 @@ class AgentSessionImpl implements AgentSession {
         sink.blocks.push({ block: msg, tsMs: Date.now() });
         if (msg.type === "tool_result" && toolResultSuspendsTurn(msg.output)) {
           sink.suspended = true;
-          if (this.structuredOutputValidator) sink.outputSchemaSuspended = true;
         }
         this.trackTurnMetrics(msg);
         await this.deps.sessionsRepo.touch(this.sessionId);
@@ -2388,7 +2388,7 @@ class AgentSessionImpl implements AgentSession {
         let outbound: AgentEvent = validateProviderStructuredResult(
           msg,
           this.structuredOutputValidator,
-          sink.outputSchemaSuspended,
+          sink.suspended,
         );
 
         if (outbound.type === "error" && outbound.code === "auth_revoked") {
@@ -3306,7 +3306,6 @@ class AgentSessionImpl implements AgentSession {
       pendingSubagentToolUses: new Map(),
       emittedSubagentStarts: new Set(),
       subagentLinksCleared: false,
-      outputSchemaSuspended: false,
       suspended: false,
       usageRecorded: false,
     };
@@ -3578,12 +3577,11 @@ class AgentSessionImpl implements AgentSession {
           }
           if (event.type === "tool_result" && toolResultSuspendsTurn(event.output)) {
             sink.suspended = true;
-            if (this.structuredOutputValidator) sink.outputSchemaSuspended = true;
           }
           const outbound = validateProviderStructuredResult(
             event,
             this.structuredOutputValidator,
-            sink.outputSchemaSuspended,
+            sink.suspended,
           );
           if (outbound.type === "result" || outbound.type === "error") {
             emittedTerminal = outbound;
@@ -3676,7 +3674,7 @@ class AgentSessionImpl implements AgentSession {
         return validateProviderStructuredResult(
           empty,
           this.structuredOutputValidator,
-          sink.outputSchemaSuspended,
+          sink.suspended,
         ) as TurnResultEvent | TurnErrorEvent;
       };
 

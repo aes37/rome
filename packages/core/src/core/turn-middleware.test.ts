@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { createTurnMiddlewareChain } from "./turn-middleware.js";
 import type { AppCatalog } from "../apps/catalog.js";
 import type { ArtifactRef } from "../apps/state.js";
-import type { AgentEvent, TurnMiddlewareContext } from "@rome-os/app-runtime";
+import type { AgentEvent, TurnMiddlewareContext, TurnOutcome } from "@rome-os/app-runtime";
+
+// The outcome a model turn that ran to the end reports.
+const completed = (): TurnOutcome => ({ status: "completed", suspended: false });
 
 describe("TurnMiddlewareChain", () => {
   const tempDirs: string[] = [];
@@ -19,9 +22,13 @@ describe("TurnMiddlewareChain", () => {
     expect(chain.size()).toBe(0);
 
     let terminalRan = false;
-    await chain.run(makeCtx(), async () => {
-      terminalRan = true;
-    });
+    await chain.run(
+      makeCtx(),
+      async () => {
+        terminalRan = true;
+      },
+      completed,
+    );
     expect(terminalRan).toBe(true);
   });
 
@@ -36,9 +43,13 @@ describe("TurnMiddlewareChain", () => {
     expect(chain.size()).toBe(1);
 
     let terminalRan = false;
-    await chain.run(makeCtx(), async () => {
-      terminalRan = true;
-    });
+    await chain.run(
+      makeCtx(),
+      async () => {
+        terminalRan = true;
+      },
+      completed,
+    );
     expect(terminalRan).toBe(true);
   });
 
@@ -60,17 +71,25 @@ describe("TurnMiddlewareChain", () => {
     // Matching session → short-circuit, terminal never runs.
     const emitted: AgentEvent[] = [];
     let terminalRan = false;
-    await chain.run(makeCtx("welcome-to-rome", emitted), async () => {
-      terminalRan = true;
-    });
+    await chain.run(
+      makeCtx("welcome-to-rome", emitted),
+      async () => {
+        terminalRan = true;
+      },
+      completed,
+    );
     expect(terminalRan).toBe(false);
     expect(emitted.map((m) => m.type)).toEqual(["text", "result"]);
 
     // Non-matching session → passthrough to the model terminal.
     let otherTerminalRan = false;
-    await chain.run(makeCtx("main"), async () => {
-      otherTerminalRan = true;
-    });
+    await chain.run(
+      makeCtx("main"),
+      async () => {
+        otherTerminalRan = true;
+      },
+      completed,
+    );
     expect(otherTerminalRan).toBe(true);
   });
 
@@ -104,6 +123,12 @@ describe("TurnMiddlewareChain", () => {
     ]);
   });
 
+  it("requires an outcome reader, so next() never resolves with nothing", async () => {
+    const chain = createTurnMiddlewareChain();
+    // @ts-expect-error a turn chain cannot run without its outcome reader
+    await chain.run(makeCtx(), async () => {});
+  });
+
   it("lets a middleware rewrite the input before the terminal reads it", async () => {
     const dir = await createMiddlewareDir(
       "rewrite",
@@ -120,9 +145,13 @@ describe("TurnMiddlewareChain", () => {
 
     const ctx = makeCtx();
     let seen = "";
-    await chain.run(ctx, async () => {
-      seen = ctx.input.prompt;
-    });
+    await chain.run(
+      ctx,
+      async () => {
+        seen = ctx.input.prompt;
+      },
+      completed,
+    );
     expect(seen).toBe("[rewritten] hello");
   });
 
@@ -143,9 +172,13 @@ describe("TurnMiddlewareChain", () => {
 
     const ctx = makeCtx("main");
     ctx.input.prompt = "x";
-    await chain.run(ctx, async () => {
-      ctx.input.prompt += ":model";
-    });
+    await chain.run(
+      ctx,
+      async () => {
+        ctx.input.prompt += ":model";
+      },
+      completed,
+    );
     expect(ctx.input.prompt).toBe("x:outer-in:inner-in:model:inner-out:outer-out");
   });
 
@@ -158,9 +191,13 @@ describe("TurnMiddlewareChain", () => {
     await chain.loadFromCatalog(catalogWithHooks([hookRef("app.boom", boom)]));
 
     let terminalRan = false;
-    await chain.run(makeCtx(), async () => {
-      terminalRan = true;
-    });
+    await chain.run(
+      makeCtx(),
+      async () => {
+        terminalRan = true;
+      },
+      completed,
+    );
     expect(terminalRan).toBe(true);
   });
 
@@ -174,9 +211,13 @@ describe("TurnMiddlewareChain", () => {
 
     let terminalRan = false;
     await expect(
-      chain.run(makeCtx(), async () => {
-        terminalRan = true;
-      }),
+      chain.run(
+        makeCtx(),
+        async () => {
+          terminalRan = true;
+        },
+        completed,
+      ),
     ).rejects.toThrow("hard stop");
     expect(terminalRan).toBe(false);
   });
