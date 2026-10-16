@@ -423,6 +423,54 @@ describe("TurnMiddlewareChain", () => {
     expect(unhandled).toEqual([]);
   });
 
+  it.each([
+    ["await next().finally(cleanup)", "await next().finally(() => {});"],
+    ["await next().then(post).catch(recover)", "await next().then(() => {}).catch(() => {});"],
+  ])("lets a middleware recover through %s", async (_label, call) => {
+    const outer = await createMiddlewareDir(
+      "derived-recover-outer",
+      `{
+        order: 0,
+        async handle(ctx, next) {
+          const outcome = await next();
+          ctx.emit({ type: "text", content: "outer saw " + outcome.status });
+        },
+      }`,
+    );
+    const recovering = await createMiddlewareDir(
+      "derived-recover",
+      `{
+        order: 1,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          try {
+            ${call}
+          } catch {}
+          ctx.emit({ type: "text", content: "recovered" });
+        },
+      }`,
+    );
+    const failing = await createMiddlewareDir(
+      "derived-recover-inner",
+      `{ order: 2, onError: "fail-closed", async handle() { throw new Error("inner broke"); } }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([
+        hookRef("app.outer", outer),
+        hookRef("app.recovering", recovering),
+        hookRef("app.failing", failing),
+      ]),
+    );
+
+    const emitted: AgentEvent[] = [];
+    await chain.run(makeCtx("main", emitted), async () => {}, completed);
+    expect(emitted).toEqual([
+      { type: "text", content: "recovered" },
+      { type: "text", content: "outer saw completed" },
+    ]);
+  });
+
   it("waits for the layers a throwing middleware started before its error leaves", async () => {
     const outer = await createMiddlewareDir(
       "drain-outer",

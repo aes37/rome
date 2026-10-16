@@ -10,26 +10,36 @@ const log = createLogger("middleware-chain");
 /**
  * What a middleware's next() returns: a thenable that records whether the
  * middleware attached a rejection handler to it (`await`, `catch`, or `then`
- * with `onRejected`). The chain reports an inner failure as the middleware's
- * own only when it never did. A native promise can't record
- * this, because `await` on one skips its `then`. The wrapped promise's own
- * rejection is always marked handled, since the chain surfaces it instead.
+ * with `onRejected`), directly or further down a chain built from it, as in
+ * `await next().finally(cleanup)` or `next().then(post).catch(recover)`. The
+ * chain reports an inner failure as the middleware's own only when it never
+ * did. A native promise can't record this, because `await` on one skips its
+ * `then`, so every derived promise is one of these too.
+ *
+ * Each one's own rejection is marked handled. The chain surfaces the inner
+ * failure itself, so a chain that never handles it, like `next().then(post)`,
+ * can't carry it out as an unhandled rejection that exits the host.
  */
 class ObservedResult<T> implements PromiseLike<T> {
-  observed = false;
   readonly [Symbol.toStringTag] = "Promise";
 
-  constructor(private readonly promise: Promise<T>) {
+  constructor(
+    private readonly promise: Promise<T>,
+    readonly tracker: { observed: boolean } = { observed: false },
+  ) {
     promise.catch(() => {});
+  }
+
+  get observed(): boolean {
+    return this.tracker.observed;
   }
 
   then<A = T, B = never>(
     onFulfilled?: ((value: T) => A | PromiseLike<A>) | null,
     onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
   ): Promise<A | B> {
-    const handlesRejection = typeof onRejected === "function";
-    if (handlesRejection) this.observed = true;
-    return guardUnhandled(this.promise.then(onFulfilled, onRejected), handlesRejection);
+    if (typeof onRejected === "function") this.tracker.observed = true;
+    return this.derive(this.promise.then(onFulfilled, onRejected));
   }
 
   catch<B = never>(onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<T | B> {
@@ -37,18 +47,12 @@ class ObservedResult<T> implements PromiseLike<T> {
   }
 
   finally(onFinally?: (() => void) | null): Promise<T> {
-    return guardUnhandled(this.promise.finally(onFinally), false);
+    return this.derive(this.promise.finally(onFinally));
   }
-}
 
-// A derived promise that handles no rejection, like `next().then(post)` or
-// `next().finally(cleanup)`, would carry the inner failure out as an unhandled
-// rejection, which exits the host. The chain reports that failure as the
-// middleware's own instead, so the derived promise's rejection is marked
-// handled.
-function guardUnhandled<R>(derived: Promise<R>, handlesRejection: boolean): Promise<R> {
-  if (!handlesRejection) derived.catch(() => {});
-  return derived;
+  private derive<R>(derived: Promise<R>): Promise<R> {
+    return new ObservedResult(derived, this.tracker) as unknown as Promise<R>;
+  }
 }
 
 /**
