@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { createTurnMiddlewareChain } from "./turn-middleware.js";
 import type { AppCatalog } from "../apps/catalog.js";
 import type { ArtifactRef } from "../apps/state.js";
-import type { AgentEvent, TurnMiddlewareContext, TurnOutcome } from "@rome-os/app-runtime";
+import type {
+  AgentEvent,
+  TurnMiddlewareContext,
+  TurnMiddlewareNext,
+  TurnOutcome,
+} from "@rome-os/app-runtime";
 
 // The outcome a model turn that ran to the end reports.
 const completed = (): TurnOutcome => ({ status: "completed", suspended: false });
@@ -129,6 +134,14 @@ describe("TurnMiddlewareChain", () => {
     await chain.run(makeCtx(), async () => {});
   });
 
+  it("types next() as possibly empty, since older hosts resolve it with nothing", () => {
+    const readStatus = async (next: TurnMiddlewareNext) => {
+      // @ts-expect-error a middleware must check the outcome before reading it
+      return (await next()).status;
+    };
+    expect(typeof readStatus).toBe("function");
+  });
+
   it("lets a middleware rewrite the input before the terminal reads it", async () => {
     const dir = await createMiddlewareDir(
       "rewrite",
@@ -220,6 +233,83 @@ describe("TurnMiddlewareChain", () => {
       ),
     ).rejects.toThrow("hard stop");
     expect(terminalRan).toBe(false);
+  });
+
+  it("keeps a failure a middleware recovered from out of the layers around it", async () => {
+    const outer = await createMiddlewareDir(
+      "recover-outer",
+      `{
+        order: 0,
+        async handle(ctx, next) {
+          const outcome = await next();
+          ctx.emit({ type: "text", content: "outer saw " + outcome.status });
+        },
+      }`,
+    );
+    const recovering = await createMiddlewareDir(
+      "recover-middle",
+      `{
+        order: 1,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          try {
+            await next();
+          } catch {
+            ctx.emit({ type: "text", content: "fallback" });
+          }
+        },
+      }`,
+    );
+    const failing = await createMiddlewareDir(
+      "recover-inner",
+      `{ order: 2, onError: "fail-closed", async handle() { throw new Error("inner broke"); } }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([
+        hookRef("app.outer", outer),
+        hookRef("app.recovering", recovering),
+        hookRef("app.failing", failing),
+      ]),
+    );
+
+    const emitted: AgentEvent[] = [];
+    await chain.run(makeCtx("main", emitted), async () => {}, completed);
+
+    expect(emitted).toEqual([
+      { type: "text", content: "fallback" },
+      { type: "text", content: "outer saw completed" },
+    ]);
+  });
+
+  it("makes an unawaited inner failure the failure of the middleware that started it", async () => {
+    const detached = await createMiddlewareDir(
+      "detached",
+      `{
+        order: 0,
+        onError: "fail-closed",
+        async handle(ctx, next) {
+          void next().catch(() => {});
+        },
+      }`,
+    );
+    const failing = await createMiddlewareDir(
+      "detached-inner",
+      `{
+        order: 1,
+        onError: "fail-closed",
+        async handle() {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          throw new Error("late failure");
+        },
+      }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(
+      catalogWithHooks([hookRef("app.detached", detached), hookRef("app.late", failing)]),
+    );
+
+    await expect(chain.run(makeCtx(), async () => {}, completed)).rejects.toThrow("late failure");
   });
 
   it("reports artifacts that do not implement handle()", async () => {
