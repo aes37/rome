@@ -101,10 +101,14 @@ function buildChatProjects(catalog: ProjectCatalog, sessions: ChatSession[]): Ch
 
 export function useChatProjects() {
   const queryClient = useQueryClient();
-  const catalog = useQuery({ queryKey: CATALOG_QUERY_KEY, queryFn: listProjects });
+  // Always fresh on mount: the sessions-changed listener lives only while a
+  // Projects page is open, so a chat renamed or deleted elsewhere in the
+  // meantime would otherwise show from the cache.
+  const catalog = useQuery({ queryKey: CATALOG_QUERY_KEY, queryFn: listProjects, staleTime: 0 });
   const sessions = useQuery({
     queryKey: SESSIONS_QUERY_KEY,
     queryFn: () => listSessions("active"),
+    staleTime: 0,
   });
   const projects = useMemo(
     () => (catalog.data && sessions.data ? buildChatProjects(catalog.data, sessions.data) : null),

@@ -83,6 +83,7 @@ const fetchMock = rs.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     const path = url.searchParams.get("path") ?? "";
     // Core rejects a path that would leave the projects root.
     if (path.split("/").includes("..")) return new Response("bad path", { status: 400 });
+    if (path === "projects/locked") return new Response("sign in", { status: 401 });
     return json({ type: rootEntries[path] ?? "missing", path });
   }
   if (url.pathname === "/api/projects/tree") {
@@ -133,8 +134,10 @@ async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
   await new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
-function renderAt(path: string) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderAt(
+  path: string,
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
@@ -262,6 +265,29 @@ describe("Projects list", () => {
 
     await rs.waitFor(() => expect(calls("/api/chat/sessions")).toBeGreaterThan(sessionReads));
     expect(calls("/api/chat/projects")).toBe(recordReads);
+  });
+
+  it("shows a chat renamed elsewhere when the guardian comes back", async () => {
+    // The dashboard's own cache defaults: data stays fresh for ten seconds.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: 10_000, retry: false } },
+    });
+    const first = renderAt("/projects/alpha", queryClient);
+    expect(await screen.findByText("Alpha newest")).toBeTruthy();
+    first.unmount();
+
+    // Renamed in the chat, while no Projects page listened.
+    sessions = sessions.map((s) => (s.id === "a2" ? { ...s, name: "Alpha renamed" } : s));
+    renderAt("/projects/alpha", queryClient);
+
+    expect(await screen.findByText("Alpha renamed")).toBeTruthy();
+  });
+
+  it("offers a retry when the lookup fails for any reason but a bad path", async () => {
+    renderAt("/projects/locked");
+
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText(/There's no project/)).toBeNull();
   });
 
   it("narrows the cards to the projects whose name matches the search", async () => {
