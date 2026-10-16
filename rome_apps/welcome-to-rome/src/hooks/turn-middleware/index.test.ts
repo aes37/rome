@@ -334,12 +334,15 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
     expect(progress.row.node).toBe("done");
   });
 
-  it("gives up on a post that never settles, so a later finished turn posts again", async () => {
+  it("ends the welcome on a post that outlasts its ceiling, and never posts a second one", async () => {
     rs.useFakeTimers();
     try {
       startBuilding();
       const { deps, runAction } = makeDeps([]);
-      runAction.mockImplementationOnce(() => new Promise<{ status: string }>(() => {}));
+      let deliverLate: (sent: { status: string }) => void = () => {};
+      runAction.mockImplementationOnce(
+        () => new Promise<{ status: string }>((resolve) => (deliverLate = resolve)),
+      );
       const hook = createHook(deps);
 
       const turn = hook.handle(
@@ -354,13 +357,19 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
         rs.fn(async () => finished),
       );
       expect(runAction).toHaveBeenCalledOnce();
+      expect(progress.row.node).toBe("building");
 
+      // Past the ceiling the post may still land, so the welcome ends as
+      // though it had and nothing posts again, even when it does land late.
       await rs.advanceTimersByTimeAsync(50_000);
+      expect(progress.row.node).toBe("done");
       await hook.handle(
         makeContext("core:main", [], "Add a due date."),
         rs.fn(async () => finished),
       );
-      expect(runAction).toHaveBeenCalledTimes(2);
+      deliverLate({ status: "ok" });
+      await rs.advanceTimersByTimeAsync(0);
+      expect(runAction).toHaveBeenCalledOnce();
       expect(progress.row.node).toBe("done");
     } finally {
       rs.useRealTimers();

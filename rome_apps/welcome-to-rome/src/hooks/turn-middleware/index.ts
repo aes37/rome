@@ -182,7 +182,9 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
    *  message, once the build has finished, and end onboarding once it posts. A
    *  turn's stream ends with its reply, so the message goes through the chat's
    *  channel instead. A failed post leaves onboarding waiting on the build, so
-   *  the next finished turn there tries again. */
+   *  the next finished turn there tries again. A post that outlasts the ceiling
+   *  may still land, and the send can't be cancelled, so the welcome ends as
+   *  though it had posted and nothing posts it again. */
   private async postClosingMessage(
     ctx: TurnMiddlewareContext,
     threadId: string,
@@ -237,7 +239,12 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
       new Promise<boolean>((resolve) => {
         ceiling = setTimeout(() => {
           warn({ error: "timed out" });
-          resolve(false);
+          try {
+            finishBuild(createProgressRepository(db), threadId);
+          } catch (err) {
+            warn({ error: err instanceof Error ? err.message : String(err) });
+          }
+          resolve(true);
         }, CLOSING_POST_CEILING_MS);
       }),
     ]).finally(() => {
