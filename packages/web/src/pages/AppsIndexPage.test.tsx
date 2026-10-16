@@ -405,6 +405,14 @@ describe("AppsIndexPage reactivity", () => {
           isEnabled: false,
         }),
         installedCard({ id: "inbox", displayName: "Inbox", origin: "builtin", status: "failed" }),
+        // Left out while it runs, but not while it needs fixing.
+        installedCard({
+          id: "browser-automation",
+          displayName: "Browser Automation",
+          origin: "builtin",
+          status: "disabled",
+          isEnabled: false,
+        }),
       ],
     });
 
@@ -413,6 +421,7 @@ describe("AppsIndexPage reactivity", () => {
     const builtinSection = await screen.findByRole("region", { name: "Built-in apps" });
     expect(await within(builtinSection).findByText("Skills")).toBeTruthy();
     expect(within(builtinSection).getByText("Inbox")).toBeTruthy();
+    expect(within(builtinSection).getByText("Browser Automation")).toBeTruthy();
   });
 
   it("lists no Rome pages, and leaves out the first-party apps with nothing to open", async () => {

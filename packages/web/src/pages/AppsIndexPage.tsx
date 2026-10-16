@@ -52,10 +52,10 @@ const UNLISTED_BUILTIN_APP_IDS: ReadonlySet<string> = new Set(["browser-automati
 
 function isUnlistedBuiltin(app: InstalledAppCard): boolean {
   if (app.origin !== "builtin") return false;
-  if (UNLISTED_BUILTIN_APP_IDS.has(app.id)) return true;
-  // The server knows whether an app has a page only once it resolves, so a
-  // disabled, failed or installing app keeps its tile and the way to fix it.
-  return app.status === "active" && !isInFlight(app.phase) && !app.hasFrontend;
+  // A disabled, failed or installing app keeps its tile and the way to fix it.
+  // The server also knows whether an app has a page only once it resolves.
+  if (app.status !== "active" || isInFlight(app.phase)) return false;
+  return UNLISTED_BUILTIN_APP_IDS.has(app.id) || !app.hasFrontend;
 }
 
 function isInFlight(phase: AppViewState): boolean {
