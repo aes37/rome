@@ -91,6 +91,19 @@ describe("buildChatView", () => {
     expect(v.identityBySession.get(MAIN)).toBe(MAIN_IDENTITY);
   });
 
+  it("speaks for a handoff to the main agent with the main identity", () => {
+    const messages = tree();
+    messages.set(MAIN, [
+      mk(MAIN, "assistant", "t2", [
+        { ...handoffBlock, appId: "welcome-to-rome", agentName: "core:main" },
+      ]),
+    ]);
+
+    const view = buildChatView(messages, MAIN, MAIN_IDENTITY);
+
+    expect(view.identityBySession.get(CHILD)).toBe(MAIN_IDENTITY);
+  });
+
   it("returns the floor to main once the handoff resolves", () => {
     const v = buildChatView(tree(true), MAIN, MAIN_IDENTITY);
     expect(v.handoffList[0].status).toBe("done");

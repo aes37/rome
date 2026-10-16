@@ -30,7 +30,8 @@ export interface SessionIdentity {
  * This hook is also the single choke point for presentation mode: while it is
  * on, the pinned-agent mention is reported as null, so every consumer (navbar,
  * per-turn identity, composer chip, mobile header) falls back to the main
- * assistant's rendering without knowing the mode exists.
+ * assistant's rendering without knowing the mode exists. An agent the catalog
+ * marks `presentAsMain` is reported the same way, always.
  */
 export function useSessionIdentity(sessionId: string | null | undefined): SessionIdentity {
   const presentationMode = usePresentationMode();
@@ -77,6 +78,12 @@ export function useSessionIdentity(sessionId: string | null | undefined): Sessio
         let appLabel = prettyAgentName(appId || agentName);
         let iconUrl: string | null = null;
         const owner = groups.find((g) => g.agents.some((a) => a.name === agentName));
+        // An agent that speaks as the main agent (onboarding) renders like an
+        // unpinned session: the main agent's chosen name and avatar.
+        if (owner?.agents.find((a) => a.name === agentName)?.presentAsMain) {
+          setPinnedAgentMention(null);
+          return;
+        }
         if (owner) {
           appId = owner.ownerId;
           appLabel = owner.label;

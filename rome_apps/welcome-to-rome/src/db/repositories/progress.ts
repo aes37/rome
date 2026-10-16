@@ -20,6 +20,7 @@ export type WelcomeNode =
   | "await_question"
   | "await_scouts"
   | "await_idea"
+  | "building"
   | "done";
 
 export interface WelcomeProgress {
@@ -62,6 +63,7 @@ const NODES: readonly WelcomeNode[] = [
   "await_question",
   "await_scouts",
   "await_idea",
+  "building",
   "done",
 ];
 

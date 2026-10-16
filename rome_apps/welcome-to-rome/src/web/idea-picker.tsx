@@ -7,11 +7,10 @@ import { getWelcomeCopy } from "@/lib/copy";
 
 // The "pick your first app" card. props: `{ ideas: [{title, prompt}] }`. Each
 // idea renders as a shadcn Item (title + description, with a "Build this" action
-// on the right). Either button resolves this turn, which ends the welcome, and
-// then hands the guardian to a FRESH chat (not this welcome session): "Build
-// this" opens it with the idea's kickoff prompt in the composer, ready to send,
-// and "I'll explore on my own" submits the `EXPLORE` sentinel and opens it
-// empty.
+// on the right). "Build this" resolves the card and stays in this chat, where
+// the welcome hands the build to the guardian's agent. "I'll explore on my own"
+// submits the `EXPLORE` sentinel, which ends the welcome, and opens a fresh,
+// empty chat.
 export const EXPLORE = "__explore__";
 
 interface Idea {
@@ -36,13 +35,12 @@ function IdeaPicker({ ctx }: { ctx: AppComponentContext }) {
   const ideas = readIdeas(ctx.props.ideas);
   const resolved = ctx.host.resolved;
 
-  // The submit posts the resolution first, so the welcome session records the
-  // choice before the shell swaps the route to the new chat.
   const build = (idea: Idea) => {
     ctx.host.submit({ ideaTitle: idea.title }, idea.title);
-    navigateRome({ path: "chat/new", draft: idea.prompt });
   };
 
+  // The submit posts the resolution first, so the welcome session records the
+  // choice before the shell swaps the route to the new chat.
   const explore = () => {
     ctx.host.submit({ ideaTitle: EXPLORE }, copy.ideas.exploreSummary);
     navigateRome({ path: "chat/new" });

@@ -73,6 +73,8 @@ export interface AgentCatalogEntry {
   name: string;
   localName?: string;
   description: string;
+  /** Shown as the guardian's main agent rather than as its owning app. */
+  presentAsMain?: boolean;
 }
 
 export interface AgentCatalogGroup {
