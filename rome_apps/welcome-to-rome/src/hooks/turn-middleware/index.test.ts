@@ -111,14 +111,17 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
     };
   }
 
-  function makeDeps(calls: string[]) {
+  function makeDeps(
+    calls: string[],
+    getSetting: (key: string) => Promise<unknown> = async () => null,
+  ) {
     const runAction = rs.fn(async () => {
       calls.push("send_message");
       return { status: "ok" };
     });
     const appContext = {
       db: {},
-      repositories: { settings: { get: async () => null, set: async () => {} } },
+      repositories: { settings: { get: getSetting, set: async () => {} } },
       runAction,
     } as unknown as RomeAppContext;
     const deps: TurnMiddlewareHookDeps = { appId: "welcome-to-rome", logger, appContext };
@@ -223,6 +226,60 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
     } finally {
       rs.useRealTimers();
     }
+  });
+
+  it("adds nothing in the welcome chat when the guardian closes the handoff while the post sends", async () => {
+    startBuilding();
+    const { deps, runAction } = makeDeps([]);
+    let land: (result: { status: string }) => void = () => {};
+    runAction.mockImplementationOnce(
+      () => new Promise<{ status: string }>((resolve) => (land = resolve)),
+    );
+    const hook = createHook(deps);
+    const turn = hook.handle(
+      makeContext("core:main", [], IDEA),
+      rs.fn(async () => finished),
+    );
+    await rs.waitFor(() => expect(runAction).toHaveBeenCalledOnce());
+
+    const welcomeEmitted: AgentMessage[] = [];
+    await hook.handle(
+      makeContext(
+        "welcome-to-rome:welcome-to-rome",
+        welcomeEmitted,
+        "The guardian dismissed the interaction without producing a result.",
+        "webchat:welcome-chat",
+      ),
+      rs.fn(async () => {}),
+    );
+    expect(welcomeEmitted).toEqual([]);
+    expect(progress.row.node).toBe("building");
+
+    land({ status: "ok" });
+    await turn;
+    expect(progress.row.node).toBe("done");
+  });
+
+  it("posts nothing when the guardian closes the handoff while the locale loads", async () => {
+    startBuilding();
+    let loadLocale: ((value: unknown) => void) | null = null;
+    const { deps, runAction } = makeDeps([], (key) =>
+      key === "guardianLanguage"
+        ? new Promise((resolve) => (loadLocale = resolve))
+        : Promise.resolve(null),
+    );
+    const turn = createHook(deps).handle(
+      makeContext("core:main", [], IDEA),
+      rs.fn(async () => finished),
+    );
+    await rs.waitFor(() => expect(loadLocale).not.toBeNull());
+
+    // The welcome's `building` step closed onboarding with its own message.
+    progress.row = { ...progress.row, node: "done", completedAt: "2026-10-15T00:00:00Z" };
+    loadLocale?.("en");
+    await turn;
+
+    expect(runAction).not.toHaveBeenCalled();
   });
 
   it("posts nothing when the guardian closes the handoff while the build runs", async () => {

@@ -76,6 +76,8 @@ export interface WelcomeEffects {
   /** Run a specialist agent inline (no child session / approval) and return its
    *  structured output. Used for autonomous steps like the idea brainstorm. */
   summon(agentName: string, prompt: string): Promise<SummonResult>;
+  /** Whether the closing message is still posting to this build chat. */
+  closingInFlight(threadId: string): boolean;
 }
 
 interface WelcomeLanguage {
@@ -174,8 +176,8 @@ function introQuestion(language: WelcomeLanguage): TurnReply {
 /** The "pick your first app" buttons. With an AI connected, "Build this"
  *  resolves this turn and the build carries on in this chat. Without one, it
  *  also opens a fresh chat with the prompt in the composer, to send once an AI
- *  is connected. The explore opt-out resolves with the EXPLORE sentinel and
- *  opens an empty chat. */
+ *  is connected, and says so in its result (`openedDraft`). The explore
+ *  opt-out resolves with the EXPLORE sentinel and opens an empty chat. */
 function ideaPicker(ideas: AppIdea[], aiConnected: boolean): TurnReply {
   return {
     kind: "component",
@@ -245,17 +247,19 @@ function waitsOnBuild(progress: WelcomeProgress, threadId: string): boolean {
 /**
  * The closing message to post after a turn of the build. Returns null when
  * onboarding no longer waits on this chat or when the turn did not finish: it
- * was stopped, it failed, or it is parked on a card. Onboarding ends only once
+ * was stopped, it failed, it is parked on a card, or the host didn't say how it
+ * ended. Onboarding ends only once
  * the message is posted, through `finishBuild`.
  */
 export function closingMessageAfterBuild(
   progress: WelcomeProgress,
   locale: WelcomeLocale,
   threadId: string,
-  outcome: TurnOutcome,
+  outcome: TurnOutcome | undefined,
 ): string | null {
   if (!waitsOnBuild(progress, threadId)) return null;
-  if (outcome.status !== "completed" || outcome.suspended) return null;
+  // A host that reports no outcome gives no proof the build finished.
+  if (!outcome || outcome.status !== "completed" || outcome.suspended) return null;
   return copyFor(locale).finishedAfterBuild;
 }
 
@@ -359,12 +363,17 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
         fx.progress.patch({ node: "done", completedAt: now() });
         return { kind: "text", text: language.copy.finishedNoPick };
       }
-      // Without an AI the guardian's agent can't run the build, so the welcome
-      // ends here and the picker has opened a new chat with the idea's prompt.
-      if (!p.aiConnected) {
+      // The picker opened a new chat with the idea's prompt, which a card
+      // shown without an AI does, and so does one from before the build moved
+      // into this chat. The welcome ends here.
+      if (readResolutionJson(userText)?.openedDraft === true) {
         fx.progress.patch({ node: "done", completedAt: now() });
         return { kind: "text", text: language.copy.pickedIdeaDraft(idea) };
       }
+      // Without an AI the guardian's agent can't run the build. A pick typed
+      // instead of clicked opened nothing, so the picker comes back to open
+      // the draft.
+      if (!p.aiConnected) return ideaPicker(ideas, false);
       // The build carries on in this chat: the guardian's agent takes the floor
       // with the idea's kickoff prompt as its brief.
       fx.progress.patch({ node: "building", buildPrompt: idea.prompt });
@@ -378,6 +387,11 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
     }
 
     case "building": {
+      // The guardian closed the build handoff while the closing message was
+      // posting to the build chat. That message ends the welcome once it posts.
+      if (p.buildSessionId && fx.closingInFlight(p.buildSessionId)) {
+        return { kind: "none" };
+      }
       // The guardian closed the build handoff from the composer before the
       // build turn finished.
       fx.progress.patch({ node: "done", completedAt: now() });

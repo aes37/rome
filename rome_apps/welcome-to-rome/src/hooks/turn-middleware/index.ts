@@ -176,7 +176,7 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
   private async postClosingMessage(
     ctx: TurnMiddlewareContext,
     threadId: string,
-    outcome: TurnOutcome,
+    outcome: TurnOutcome | undefined,
   ): Promise<void> {
     const appContext = this.deps.appContext;
     if (!appContext?.db || this.closingInFlight.has(threadId)) return;
@@ -186,11 +186,14 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
         sessionId: ctx.session.id,
         ...detail,
       });
+    // Progress is read after the locale, right before the post, so a handoff
+    // the guardian closed or a start over during the lookup posts nothing.
+    const locale = await this.getLocale();
     let text: string | null;
     try {
       text = closingMessageAfterBuild(
         createProgressRepository(db).get(),
-        await this.getLocale(),
+        locale,
         threadId,
         outcome,
       );
@@ -258,6 +261,7 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
       // ordering against the emits that follow.
       say: (text: string) => typeOut((event) => ctx.emit(event), text, "commentary"),
       summon: (agentName, prompt) => this.summon(agentName, prompt),
+      closingInFlight: (threadId) => this.closingInFlight.has(threadId),
     };
   }
 

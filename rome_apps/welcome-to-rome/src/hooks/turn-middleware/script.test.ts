@@ -49,6 +49,7 @@ function makeEffects(node: WelcomeProgress["node"], overrides: Partial<WelcomePr
     writeNames,
     say: rs.fn(async () => {}),
     summon: rs.fn(),
+    closingInFlight: rs.fn(() => false),
   } as unknown as WelcomeEffects;
   return { fx, writeNames, getRow: () => row, getNode: () => row.node };
 }
@@ -59,6 +60,10 @@ const resolution = (obj: unknown) => `\`\`\`json\n${JSON.stringify(obj)}\n\`\`\`
 const resolved = (obj: unknown) =>
   `The interaction the guardian was working in resolved with this result:\n\n${resolution(obj)}\n\nContinue based on this result.`;
 const DISMISSED = "The guardian dismissed the interaction without producing a result.";
+/** The context blocks core can put ahead of a turn's prompt. */
+const THREAD_CONTEXT = "<thread_context>\nChat: Welcome\n</thread_context>\n\n";
+const WORKSPACE_CONTEXT =
+  "<workspace_context>\nOpen: Notes &lt;draft&gt;\n</workspace_context>\n\n";
 
 describe("runTurn — greeting and the name card", () => {
   it("greets by name and prefills the card with both names", async () => {
@@ -113,10 +118,14 @@ describe("runTurn — greeting and the name card", () => {
     expect(getNode()).toBe("await_ai");
   });
 
-  it("keeps the prefilled names on a dismissed card", async () => {
+  it.each([
+    ["", ""],
+    [" behind the open surfaces' context", WORKSPACE_CONTEXT],
+    [" behind a new session's framing", `${THREAD_CONTEXT}${WORKSPACE_CONTEXT}`],
+  ])("keeps the prefilled names on a dismissed card%s", async (_label, prefix) => {
     const { fx, writeNames, getNode } = makeEffects("await_names");
 
-    await runTurn(DISMISSED, fx);
+    await runTurn(`${prefix}${DISMISSED}`, fx);
 
     expect(writeNames).toHaveBeenCalledWith({ guardianName: "Alex", agentName: "Rome" });
     expect(getNode()).toBe("await_ai");
@@ -324,13 +333,17 @@ describe("runTurn — done", () => {
     expect(getRow().completedAt).toBeNull();
   });
 
-  it("finishes the welcome with a drafted chat when no AI is connected", async () => {
+  it.each([
+    ["shown without an AI", false],
+    // A card from before the build moved into this chat drafts even with an AI.
+    ["from before the build moved into this chat", true],
+  ])("finishes the welcome when a card %s opened a drafted chat", async (_label, aiConnected) => {
     const { fx, getRow } = makeEffects("await_idea", {
-      aiConnected: false,
+      aiConnected,
       ideas: [{ title: "Launch tracker", prompt: "Build me a launch tracker." }],
     });
 
-    const reply = await runTurn(resolution({ ideaTitle: "Launch tracker" }), fx);
+    const reply = await runTurn(resolution({ ideaTitle: "Launch tracker", openedDraft: true }), fx);
 
     expect(reply).toMatchObject({
       kind: "text",
@@ -338,6 +351,20 @@ describe("runTurn — done", () => {
     });
     expect(getRow().node).toBe("done");
     expect(getRow().buildPrompt).toBeNull();
+  });
+
+  it("shows the picker again for a typed pick with no AI connected, since no chat opened", async () => {
+    const ideas = [{ title: "Launch tracker", prompt: "Build me a launch tracker." }];
+    const { fx, getRow } = makeEffects("await_idea", { aiConnected: false, ideas });
+
+    const reply = await runTurn("1", fx);
+
+    expect(reply).toEqual({
+      kind: "component",
+      componentId: "idea-picker",
+      props: { ideas, buildInChat: false },
+    });
+    expect(getRow().node).toBe("await_idea");
   });
 
   it("finishes the welcome when the build handoff closes before the build turn ends", async () => {
@@ -349,6 +376,15 @@ describe("runTurn — done", () => {
     if (reply.kind === "text") expect(reply.text).toContain("App Store");
     expect(getRow().node).toBe("done");
     expect(getRow().completedAt).toEqual(expect.any(String));
+  });
+
+  it("adds nothing when the build handoff closes while the closing message is posting", async () => {
+    const { fx, getRow } = makeEffects("building", { buildSessionId: "build-chat" });
+    rs.mocked(fx.closingInFlight).mockImplementation((threadId) => threadId === "build-chat");
+
+    expect(await runTurn(DISMISSED, fx)).toEqual({ kind: "none" });
+    // The closing message ends the welcome once it posts.
+    expect(getRow().node).toBe("building");
   });
 
   it("recognizes the build's first turn by the picked idea's prompt, in a webchat chat", () => {
@@ -415,6 +451,7 @@ describe("runTurn — done", () => {
     ["stopped", { status: "interrupted", suspended: false }],
     ["failed", { status: "error", suspended: false }],
     ["parked on a card", { status: "completed", suspended: true }],
+    ["ended on a host that reports no outcome", undefined],
   ] as const)("keeps waiting on the build after a turn that %s", (_label, outcome) => {
     const { fx, getRow } = makeEffects("building");
     startBuild(fx.progress, "build-chat");
@@ -443,10 +480,18 @@ describe("runTurn — done", () => {
     expect(await runTurn(resolved({ summary: "done" }), fx)).toEqual({ kind: "none" });
     // A typed message still gets the reminder, even one with a JSON snippet or
     // core's dismissal phrase.
+    // Behind the context blocks core can put ahead of the prompt, too.
+    expect(await runTurn(`${THREAD_CONTEXT}${WORKSPACE_CONTEXT}${DISMISSED}`, fx)).toEqual({
+      kind: "none",
+    });
+    expect(await runTurn(`${WORKSPACE_CONTEXT}${resolved({ summary: "done" })}`, fx)).toEqual({
+      kind: "none",
+    });
     for (const typed of [
       "hello again",
       `Why does this fail?\n${resolution({ a: 1 })}`,
       "Why do I see 'dismissed the interaction' here?",
+      `${WORKSPACE_CONTEXT}Why do I see "${DISMISSED}" here?`,
     ]) {
       expect(await runTurn(typed, fx)).toMatchObject({
         kind: "text",
