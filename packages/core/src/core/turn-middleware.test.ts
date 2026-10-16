@@ -74,6 +74,36 @@ describe("TurnMiddlewareChain", () => {
     expect(otherTerminalRan).toBe(true);
   });
 
+  it("resolves next() with how the inner turn ended", async () => {
+    const dir = await createMiddlewareDir(
+      "outcome",
+      `{
+        order: 0,
+        async handle(ctx, next) {
+          const outcome = await next();
+          ctx.emit({ type: "text", content: JSON.stringify(outcome) });
+        },
+      }`,
+    );
+    const chain = createTurnMiddlewareChain();
+    await chain.loadFromCatalog(catalogWithHooks([hookRef("app.outcome", dir)]));
+
+    const emitted: AgentEvent[] = [];
+    let terminalRan = false;
+    await chain.run(
+      makeCtx("main", emitted),
+      async () => {
+        terminalRan = true;
+      },
+      () => ({ status: "interrupted", suspended: false }),
+    );
+
+    expect(terminalRan).toBe(true);
+    expect(emitted).toEqual([
+      { type: "text", content: JSON.stringify({ status: "interrupted", suspended: false }) },
+    ]);
+  });
+
   it("lets a middleware rewrite the input before the terminal reads it", async () => {
     const dir = await createMiddlewareDir(
       "rewrite",

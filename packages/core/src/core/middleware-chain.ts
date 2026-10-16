@@ -18,20 +18,20 @@ const log = createLogger("middleware-chain");
  * telemetry) lives here once; the per-kind context shape and terminal stay with
  * the call site that owns them.
  */
-export interface Middleware<Ctx> {
+export interface Middleware<Ctx, Outcome = void> {
   /** Explicit ordering, lowest runs furthest out. The terminal is always
    *  innermost regardless of declared order. */
   order: number;
   /** How the chain treats a throw: `fail-open` (default) skips the middleware
    *  and continues to `next()`; `fail-closed` aborts by rethrowing. */
   onError?: "fail-open" | "fail-closed";
-  handle(ctx: Ctx, next: () => Promise<void>): Promise<void>;
+  handle(ctx: Ctx, next: () => Promise<Outcome>): Promise<void>;
 }
 
-interface LoadedMiddleware<Ctx> {
+interface LoadedMiddleware<Ctx, Outcome> {
   appId: string;
   artifactPath: string;
-  hook: Middleware<Ctx>;
+  hook: Middleware<Ctx, Outcome>;
 }
 
 export interface MiddlewareLoadFailure {
@@ -47,35 +47,36 @@ export interface MiddlewareLoadFailure {
  */
 export type MiddlewareTerminal = () => Promise<void>;
 
-export interface MiddlewareChain<Ctx> {
+export interface MiddlewareChain<Ctx, Outcome = void> {
   /** (Re)load all artifacts of this kind from the catalog. Returns any
    *  per-artifact load failures (a bad middleware is dropped, never fatal). */
   loadFromCatalog(catalog: AppCatalog): Promise<MiddlewareLoadFailure[]>;
   /** Execute the onion around `terminal`. With an empty chain this is exactly
-   *  `await terminal()`. */
-  run(ctx: Ctx, terminal: MiddlewareTerminal): Promise<void>;
+   *  `await terminal()`. Each middleware's `next()` resolves with
+   *  `readOutcome()`, read once the layers inside it have finished. */
+  run(ctx: Ctx, terminal: MiddlewareTerminal, readOutcome?: () => Outcome): Promise<void>;
   /** Number of loaded middlewares (0 ⇒ pure passthrough). */
   size(): number;
 }
 
-export interface MiddlewareChainOptions<Ctx> {
+export interface MiddlewareChainOptions<Ctx, Outcome = void> {
   /** The hook `publicName` that identifies this kind in the catalog. */
   hookName: string;
   /** Narrow a loaded hook to this kind's contract, throwing on mismatch. */
-  assert(hook: unknown, artifact: ArtifactRef): asserts hook is Middleware<Ctx>;
+  assert(hook: unknown, artifact: ArtifactRef): asserts hook is Middleware<Ctx, Outcome>;
   appRuntimeServices?: RomeAppRuntimeServices;
 }
 
-export function createMiddlewareChain<Ctx>(
-  options: MiddlewareChainOptions<Ctx>,
-): MiddlewareChain<Ctx> {
+export function createMiddlewareChain<Ctx, Outcome = void>(
+  options: MiddlewareChainOptions<Ctx, Outcome>,
+): MiddlewareChain<Ctx, Outcome> {
   const { hookName, appRuntimeServices } = options;
-  let middlewares: LoadedMiddleware<Ctx>[] = [];
+  let middlewares: LoadedMiddleware<Ctx, Outcome>[] = [];
 
   return {
     async loadFromCatalog(catalog) {
       const failures: MiddlewareLoadFailure[] = [];
-      const next: LoadedMiddleware<Ctx>[] = [];
+      const next: LoadedMiddleware<Ctx, Outcome>[] = [];
 
       for (const artifact of catalog.listArtifacts("hook")) {
         if (artifact.publicName !== hookName) continue;
@@ -99,7 +100,7 @@ export function createMiddlewareChain<Ctx>(
       return failures;
     },
 
-    async run(ctx, terminal) {
+    async run(ctx, terminal, readOutcome = () => undefined as Outcome) {
       const chain = middlewares;
       if (chain.length === 0) {
         await terminal();
@@ -113,12 +114,13 @@ export function createMiddlewareChain<Ctx>(
         }
         const mw = chain[i];
         let nextCalled = false;
-        const next = async (): Promise<void> => {
+        const next = async (): Promise<Outcome> => {
           if (nextCalled) {
             throw new Error(`${hookName} middleware (${mw.appId}) called next() more than once`);
           }
           nextCalled = true;
           await dispatch(i + 1);
+          return readOutcome();
         };
         try {
           await wrapHookSpan(

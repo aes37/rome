@@ -38,6 +38,7 @@ import type {
   RomeSessionType,
   StreamAgentEvent,
   TurnMiddlewareContext,
+  TurnOutcome,
   ConversationId,
   ConversationRef,
   ProviderSessionResetPolicy,
@@ -1917,6 +1918,10 @@ interface TurnSink {
   subagentLinksCleared: boolean;
   /** A schema-bound turn is terminal-only and cannot be resumed after a parked action. */
   outputSchemaSuspended: boolean;
+  /** A tool result parked the turn on a card that waits for the guardian. */
+  suspended: boolean;
+  /** The status the turn_end bracket reported, once it is published. */
+  endStatus?: TurnOutcome["status"];
   /**
    * The model session's `lastProviderTurnId` when the turn took the turn
    * mutex. A turn that never reached the provider leaves it unchanged, so an
@@ -2328,12 +2333,9 @@ class AgentSessionImpl implements AgentSession {
         // translator runs on terminal and needs the full block stream to
         // reconstruct rounds and tool pairs.
         sink.blocks.push({ block: msg, tsMs: Date.now() });
-        if (
-          this.structuredOutputValidator &&
-          msg.type === "tool_result" &&
-          toolResultSuspendsTurn(msg.output)
-        ) {
-          sink.outputSchemaSuspended = true;
+        if (msg.type === "tool_result" && toolResultSuspendsTurn(msg.output)) {
+          sink.suspended = true;
+          if (this.structuredOutputValidator) sink.outputSchemaSuspended = true;
         }
         this.trackTurnMetrics(msg);
         await this.deps.sessionsRepo.touch(this.sessionId);
@@ -2468,10 +2470,15 @@ class AgentSessionImpl implements AgentSession {
     const accounting =
       terminal.type === "result" || terminal.type === "error" ? terminal.accounting : undefined;
     const interrupted = sink.lifecycleInterrupted || isInterruptedAccounting(accounting);
+    sink.endStatus = interrupted
+      ? "interrupted"
+      : terminal.type === "error"
+        ? "error"
+        : "completed";
     this.publishOutbound(sink, {
       type: "turn_end",
       turnId: sink.turnId,
-      status: interrupted ? "interrupted" : terminal.type === "error" ? "error" : "completed",
+      status: sink.endStatus,
       durationMs: startMs === undefined ? 0 : Date.now() - startMs,
     });
   }
@@ -3297,6 +3304,7 @@ class AgentSessionImpl implements AgentSession {
       emittedSubagentStarts: new Set(),
       subagentLinksCleared: false,
       outputSchemaSuspended: false,
+      suspended: false,
       usageRecorded: false,
     };
     const events = this.buildTurnEvents(sink);
@@ -3565,12 +3573,9 @@ class AgentSessionImpl implements AgentSession {
             }
             return;
           }
-          if (
-            this.structuredOutputValidator &&
-            event.type === "tool_result" &&
-            toolResultSuspendsTurn(event.output)
-          ) {
-            sink.outputSchemaSuspended = true;
+          if (event.type === "tool_result" && toolResultSuspendsTurn(event.output)) {
+            sink.suspended = true;
+            if (this.structuredOutputValidator) sink.outputSchemaSuspended = true;
           }
           const outbound = validateProviderStructuredResult(
             event,
@@ -3657,10 +3662,19 @@ class AgentSessionImpl implements AgentSession {
         await waitForSinkClose();
       };
 
+      // What a middleware's next() resolves with. The model's turn_end status
+      // when the model ran, else the terminal an inner middleware emitted.
+      const readOutcome = (): TurnOutcome => ({
+        status: sink.lifecycleInterrupted
+          ? "interrupted"
+          : (sink.endStatus ?? (emittedTerminal?.type === "error" ? "error" : "completed")),
+        suspended: sink.suspended,
+      });
+
       const chain = this.deps.turnMiddleware;
       if (chain) {
         try {
-          await chain.run(mwCtx, runModelTerminal);
+          await chain.run(mwCtx, runModelTerminal, readOutcome);
         } catch (err) {
           // A fail-closed throw after the terminal, or after next() started
           // the model, cannot change the outcome, so the turn ends on the
