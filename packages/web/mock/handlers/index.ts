@@ -42,6 +42,9 @@ import { activityHandlers, approvalCardId } from "./activity";
 import { appHandlers } from "./apps";
 import { appKeysHandlers } from "./app-keys";
 import { liveEventsHandlers } from "./live-events";
+import { nodeConsoleHandlers } from "./node-console";
+import { LINKABLE_SERVICES, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
+import { platformOf } from "@rome/api-types/platform";
 import { connections } from "./connections-store";
 import { dir, file, fileBrowserHandlers, type MockFsNode } from "./file-browser";
 import { memoryFileHandlers } from "./memory-files";
@@ -799,6 +802,10 @@ const chatAgents: AgentCatalogGroup[] = [
   },
 ];
 
+/** The loaded agents `GET /api/agents` lists, which the account link picker
+ *  offers and its PUT accepts. */
+const mockAgentNames = [MAIN_AGENT_ID, "build", "sales:agent"];
+
 // Long enough to overflow the project picker's 260px list, so the pinned
 // "no project selected" row can be exercised against a scrolling list.
 const projectCatalog: ProjectCatalog = {
@@ -1230,8 +1237,106 @@ export const handlers = [
     return HttpResponse.json({ status: "set", tzid: body.timezone });
   }),
   http.get("/api/system/upgrade/status/snapshot", () => HttpResponse.json(upgradeStatus())),
-  http.get("/api/agents", () => HttpResponse.json({ agents: [{ name: "build" }] })),
+  http.get("/api/agents", () =>
+    HttpResponse.json({ agents: mockAgentNames.map((name) => ({ name })) }),
+  ),
   http.get("/api/connections", () => HttpResponse.json(connections)),
+  // "Add another account": mint an unauthorized Connection under a fresh
+  // opaque channel id, as core does for every account after a service's first.
+  // Its setup ceremony is out of reach here (see "What mock mode cannot do"),
+  // so the new account stays unconnected until reload.
+  http.post("/api/connections", async ({ request }) => {
+    const body = (await request.json()) as { service?: string };
+    const service = body.service ?? "";
+    // Core decides this per service and reports it as `severalAccounts`, so
+    // the mock reads it off the service's first connection.
+    const first = connections.connections.find((candidate) => candidate.service === service);
+    if (!first?.severalAccounts) {
+      return HttpResponse.json(
+        { error: `${service || "This service"} does not offer several accounts.` },
+        { status: 400 },
+      );
+    }
+    // Like core, hand back an account that never received a grant before
+    // minting another.
+    const unfinished = connections.connections.find(
+      (candidate) =>
+        candidate.service === service &&
+        Object.values(candidate.grants).every((state) => state === "unauthorized"),
+    );
+    if (unfinished) return HttpResponse.json({ connection: unfinished }, { status: 200 });
+    const channel = crypto.randomUUID();
+    const grantNames = Object.keys(first.grants);
+    const grants = Object.fromEntries(grantNames.map((grant) => [grant, "unauthorized" as const]));
+    const connection: ApiConnection = {
+      id: `${channel}-mock`,
+      service,
+      label: first.label.split(" · ")[0] ?? service,
+      grants,
+      display: Object.fromEntries(grantNames.map((grant) => [grant, null])),
+      capabilities: {
+        talk: { state: "needs-auth", missingGrants: grantNames },
+        act: { state: "unsupported" },
+        watch: { state: "unsupported" },
+      },
+      connect: null,
+      setups: {},
+      channel,
+      linkedAgent: null,
+      severalAccounts: true,
+    };
+    connections.connections.push(connection);
+    return HttpResponse.json({ connection }, { status: 201 });
+  }),
+  // Link an agent to an account. On one platform an agent other than main
+  // links to at most one account, so linking it here takes the link off the
+  // other one.
+  http.put("/api/channels/accounts/:id/agent", async ({ params, request }) => {
+    const id = String(params.id);
+    const body = (await request.json()) as { agent: string | null };
+    // Core stores main by its canonical id and accepts the short name.
+    const agent = body.agent === "main" ? MAIN_AGENT_ID : body.agent;
+    const target = connections.connections.find((candidate) => candidate.channel === id);
+    if (!target) return HttpResponse.json({ error: "Unknown account." }, { status: 404 });
+    if (agent !== null && !mockAgentNames.includes(agent)) {
+      return HttpResponse.json({ error: `Agent ${agent} is not loaded.` }, { status: 400 });
+    }
+    if (!LINKABLE_SERVICES.has(target.service)) {
+      return HttpResponse.json(
+        { error: `${target.service} accounts do not take a linked agent.` },
+        { status: 400 },
+      );
+    }
+    const connected = Object.values(target.grants).some((state) => state !== "unauthorized");
+    if (!connected) {
+      return HttpResponse.json(
+        { error: "This account does not receive messages." },
+        { status: 409 },
+      );
+    }
+    const platform = platformOf(target.service);
+    let unlinkedFrom: string | null = null;
+    // Main may answer on several accounts, so only other agents move.
+    if (agent !== null && agent !== MAIN_AGENT_ID) {
+      for (const other of connections.connections) {
+        if (other === target || other.linkedAgent !== agent) continue;
+        if (platformOf(other.service) !== platform) continue;
+        other.linkedAgent = null;
+        unlinkedFrom = other.channel ?? null;
+      }
+    }
+    target.linkedAgent = agent;
+    return HttpResponse.json({
+      account: {
+        id,
+        service: target.service,
+        platform,
+        connectionId: target.id,
+        agent,
+      },
+      unlinkedFrom,
+    });
+  }),
   // An authorized grant is what puts Disconnect on a card, so seeding the three
   // above without this would make every one of those buttons fail locally.
   // Teardown is real here, the way the route runs it: the grant
@@ -1303,6 +1408,7 @@ export const handlers = [
   ...recordedAppHandlers,
   ...appKeysHandlers,
   ...liveEventsHandlers,
+  ...nodeConsoleHandlers,
   // The two file-browser surfaces, each an in-memory filesystem: the projects
   // dir and the memory dir a person's dossier links into.
   ...projectFileHandlers,

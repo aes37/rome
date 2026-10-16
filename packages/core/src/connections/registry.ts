@@ -6,10 +6,10 @@ import { KeyedMutex } from "../lib/keyed-mutex.js";
 import { createLogger, type Logger } from "../logger.js";
 import type { ConnectionRecord, GrantLedger, GrantRecord, PersistedCredential } from "./ledger.js";
 import {
+  AccountAlreadyConnectedError,
   CredentialRejected,
   Disconnected,
   DuplicateServiceConnectionsError,
-  ServiceConnectionWriteConflict,
 } from "./errors.js";
 import type {
   Act,
@@ -53,6 +53,13 @@ export interface ConnectionRegistryDeps {
   backoff?: { baseMs: number; maxMs: number };
   /** Injectable sleep for Disconnected backoff waits; defaults to real timers. */
   sleep?: (ms: number) => Promise<void>;
+  /** Runs inside the transaction that mints a Connection, so whatever the
+   *  caller records for it (the channel it backs) commits or rolls back with
+   *  the row. */
+  onMint?: (tx: DrizzleTx, record: ConnectionRecord) => void;
+  /** Runs inside the transaction that deletes a Connection, before any
+   *  caller participant. */
+  onRemove?: (tx: DrizzleTx, id: ConnectionId) => void;
 }
 
 const DEFAULT_BACKOFF = { baseMs: 1_000, maxMs: 60_000 };
@@ -155,6 +162,8 @@ export class ConnectionRegistry {
   private readonly clock: () => Date;
   private readonly backoff: { baseMs: number; maxMs: number };
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly onMint?: (tx: DrizzleTx, record: ConnectionRecord) => void;
+  private readonly onRemove?: (tx: DrizzleTx, id: ConnectionId) => void;
 
   private readonly descriptors = new Map<string, RegisteredDescriptor>();
   private readonly connections = new Map<ConnectionId, ConnectionImpl>();
@@ -170,8 +179,9 @@ export class ConnectionRegistry {
    *  to own; keys are bounded by the registered services × their grants and
    *  evicted when idle. */
   private readonly sectionMutex = new KeyedMutex();
-  /** Serializes every possible Service-connection mint path. Database
-   *  uniqueness remains the cross-process backstop. */
+  /** Serializes every Service-connection mint path, so `connect`'s refusal of
+   *  a second Connection never races another mint. It holds within one
+   *  process, and one Rome process owns a system database. */
   private readonly connectionMutex = new KeyedMutex();
   private readonly ingressHandlers = new Map<ConnectionId, (input: unknown) => Promise<unknown>>();
   private capabilityActivationPaused = false;
@@ -182,6 +192,8 @@ export class ConnectionRegistry {
     this.clock = deps.clock ?? (() => new Date());
     this.backoff = deps.backoff ?? DEFAULT_BACKOFF;
     this.sleep = deps.sleep ?? defaultSleep;
+    this.onMint = deps.onMint;
+    this.onRemove = deps.onRemove;
   }
 
   /** Declare a service integration. Boot-time only. Validates that every
@@ -263,34 +275,58 @@ export class ConnectionRegistry {
 
   /** Mint a new Connection from a registered descriptor. Persists the record,
    *  makes sure every declared grant row exists ("unauthorized"), and builds any
-   *  zero-grant capabilities immediately (epoch from birth). */
+   *  zero-grant capabilities immediately (epoch from birth). Refuses a Service
+   *  that already holds a Connection; {@link connectAnother} is the one path
+   *  that adds a second. */
   async connect(service: string, label?: string): Promise<Connection> {
     return this.connectionMutex.runExclusive(service, async () => {
-      const registered = this.descriptors.get(service);
-      if (!registered) throw new Error(`no registered descriptor for service "${service}"`);
       const existing = this.find(service);
       if (existing.length > 0) {
         throw new DuplicateServiceConnectionsError([
           { service, connectionIds: existing.map((connection) => connection.id) },
         ]);
       }
-
-      const id = crypto.randomUUID();
-      const createdAt = this.clock();
-      const record = { id, service, label: label ?? service, createdAt };
-      try {
-        this.createConnectionWithGrants(record, Object.keys(registered.descriptor.auth));
-      } catch (error) {
-        if (error instanceof ServiceConnectionWriteConflict) {
-          throw await this.duplicateServiceError(service);
-        }
-        throw error;
-      }
-      const conn = new ConnectionImpl(id, service, label ?? service, registered.descriptor, this);
-      this.connections.set(id, conn);
-      await conn.hydrate();
-      return conn;
+      return this.mint(service, label);
     });
+  }
+
+  /** Mint another Connection for a Service, whether or not it already holds
+   *  one. Every other caller assumes one Connection per Service, so only a
+   *  caller that asks for a second account uses this. */
+  async connectAnother(service: string, label?: string): Promise<Connection> {
+    return this.connectionMutex.runExclusive(service, () => this.mint(service, label));
+  }
+
+  /** Hand back a Connection of `service` that no conferral has ever filled, or
+   *  mint another when there is none. The lookup and the mint share the
+   *  service's mint lock, so two overlapping calls get the same Connection.
+   *  A Connection whose grant was revoked keeps its channel and is not handed
+   *  back, since it was an account the guardian used. */
+  async connectUnusedOrAnother(
+    service: string,
+  ): Promise<{ connection: Connection; minted: boolean }> {
+    return this.connectionMutex.runExclusive(service, async () => {
+      for (const existing of this.find(service)) {
+        const grants = await this.ledger.listGrants(existing.id);
+        if (grants.length > 0 && grants.every((grant) => grant.conferredAt === undefined)) {
+          return { connection: existing, minted: false };
+        }
+      }
+      return { connection: await this.mint(service, undefined), minted: true };
+    });
+  }
+
+  private async mint(service: string, label: string | undefined): Promise<Connection> {
+    const registered = this.descriptors.get(service);
+    if (!registered) throw new Error(`no registered descriptor for service "${service}"`);
+    const id = crypto.randomUUID();
+    const createdAt = this.clock();
+    const record = { id, service, label: label ?? service, createdAt };
+    this.createConnectionWithGrants(record, Object.keys(registered.descriptor.auth));
+    const conn = new ConnectionImpl(id, service, label ?? service, registered.descriptor, this);
+    this.connections.set(id, conn);
+    await conn.hydrate();
+    return conn;
   }
 
   /** Persist a connection and all of its initial grant placeholders as one
@@ -300,19 +336,8 @@ export class ConnectionRegistry {
     ledger.runInTransaction((tx) => {
       ledger.writeConnection(tx, record);
       for (const grant of grants) ledger.writeEnsureGrant(tx, record.id, grant);
+      this.onMint?.(tx, record);
     });
-  }
-
-  private async duplicateServiceError(service: string): Promise<DuplicateServiceConnectionsError> {
-    const records = await this.ledger.listConnections();
-    return new DuplicateServiceConnectionsError([
-      {
-        service,
-        connectionIds: records
-          .filter((record) => record.service === service)
-          .map((record) => record.id),
-      },
-    ]);
   }
 
   get(id: ConnectionId): Connection {
@@ -358,7 +383,10 @@ export class ConnectionRegistry {
     await this.connectionMutex.runExclusive(conn.service, async () => {
       const current = this.connections.get(id);
       if (!current) throw new Error(`unknown connection "${id}"`);
-      await this.ledger.deleteConnection(id, opts.inTx);
+      await this.ledger.deleteConnection(id, (tx) => {
+        this.onRemove?.(tx, id);
+        opts.inTx?.(tx);
+      });
       current.teardownAll();
       this.connections.delete(id);
     });
@@ -401,16 +429,9 @@ export class ConnectionRegistry {
     profile: ProfileRecord | undefined,
     opts: { inTx?: (tx: DrizzleTx) => void } = {},
   ): Promise<Connection> {
-    try {
-      return await this.connectionMutex.runExclusive(service, () =>
-        this.conferExclusive(service, connectionId, grant, credential, profile, opts),
-      );
-    } catch (error) {
-      if (error instanceof ServiceConnectionWriteConflict) {
-        throw await this.duplicateServiceError(service);
-      }
-      throw error;
-    }
+    return this.connectionMutex.runExclusive(service, () =>
+      this.conferExclusive(service, connectionId, grant, credential, profile, opts),
+    );
   }
 
   private async conferExclusive(
@@ -434,6 +455,9 @@ export class ConnectionRegistry {
     }
 
     const id = conn?.id ?? crypto.randomUUID();
+    if (registered && profile !== undefined) {
+      await this.refuseAccountHeldElsewhere(registered.descriptor, id, grant, profile);
+    }
     const createdAt = this.clock();
     const patch = conferralPatch(this.now(), credential, profile);
     const ledger = this.ledger;
@@ -442,10 +466,12 @@ export class ConnectionRegistry {
     // placeholder), the credential/profile, and the caller's participant.
     ledger.runInTransaction((tx) => {
       if (minting) {
-        ledger.writeConnection(tx, { id, service, label: service, createdAt });
+        const record = { id, service, label: service, createdAt };
+        ledger.writeConnection(tx, record);
         for (const name of Object.keys(registered!.descriptor.auth)) {
           ledger.writeEnsureGrant(tx, id, name);
         }
+        this.onMint?.(tx, record);
       }
       ledger.writeGrant(tx, id, grant, patch);
       opts.inTx?.(tx);
@@ -472,6 +498,34 @@ export class ConnectionRegistry {
       });
     }
     return conn as Connection;
+  }
+
+  /** Throws AccountAlreadyConnectedError when another Connection of the
+   *  service holds `grant`, in any state but "unauthorized", for the account
+   *  `profile` names. Call under the service's `connectionMutex`, so no confer
+   *  can fill another Connection between this read and the caller's write. */
+  private async refuseAccountHeldElsewhere(
+    descriptor: ConnectionDescriptor,
+    connectionId: ConnectionId,
+    grant: GrantName,
+    profile: ProfileRecord,
+  ): Promise<void> {
+    const accountIdOf = descriptor.accountIdOf;
+    if (!accountIdOf) return;
+    const accountId = accountIdOf(grant, profile);
+    if (!accountId) return;
+    for (const other of this.find(descriptor.service)) {
+      if (other.id === connectionId) continue;
+      const held = await this.ledger.getGrant(other.id, grant);
+      if (
+        held &&
+        held.state !== "unauthorized" &&
+        held.profile !== undefined &&
+        accountIdOf(grant, held.profile) === accountId
+      ) {
+        throw new AccountAlreadyConnectedError(descriptor.service, accountId, other.id);
+      }
+    }
   }
 
   /** Headless conferral: skip confer(), inject a caller-supplied credential.

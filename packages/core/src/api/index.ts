@@ -11,6 +11,7 @@ import { buildAppIdentity } from "./app-home-screen.js";
 import { buildAppSocialCard } from "./app-social-card.js";
 import { attachTerminalServer } from "../terminal-server.js";
 import { attachLiveEventsServer } from "../live-events-server.js";
+import { attachNodeConsoleServer } from "../node-console-server.js";
 import { attachDesktopProxy } from "../desktop-proxy-server.js";
 import { attachAppWebSocket } from "../apps/websocket-server.js";
 import { errorHandler } from "./middleware/error-handler.js";
@@ -27,6 +28,7 @@ import { skillsRoutes } from "./routes/skills.js";
 import { discordCliRoutes } from "./routes/discord-cli.js";
 import { conversationSettingsRoutes } from "./routes/conversation-settings.js";
 import { connectionsRoutes } from "./routes/connections.js";
+import { channelAccountsRoutes } from "./routes/channel-accounts.js";
 import { setupsRoutes } from "./routes/setups.js";
 import { approvalsRoutes } from "./routes/approvals.js";
 import { appApiDashboardRoutes, appApiPublicRoutes } from "./routes/app-api.js";
@@ -146,6 +148,7 @@ export function buildApp(
   api.route("/", appApiPublicRoutes(deps));
   api.route("/", integrationsRoutes(deps));
   api.route("/", connectionsRoutes(deps));
+  api.route("/", channelAccountsRoutes(deps));
   api.route("/", setupsRoutes(deps));
   api.route("/", capabilityDiscoveryRoutes(hostCapabilityDiscoverySource));
   api.route("/", desktopRoutes());
@@ -272,6 +275,7 @@ export async function startApi(config: ApiConfig, deps: ApiDeps): Promise<ApiHan
           close: async () => {
             terminalServer.close();
             liveEvents.close();
+            nodeConsole.close();
             desktopProxy.close();
             appWebSocket.close();
             await webchatRuntime.flushAll();
@@ -301,6 +305,7 @@ export async function startApi(config: ApiConfig, deps: ApiDeps): Promise<ApiHan
           subscribeAppCatalog: (emit) => subscribeCatalogChanges(deps.appCatalog, emit),
         },
       );
+      const nodeConsole = attachNodeConsoleServer(server as Server, deps.db);
       const desktopProxy = attachDesktopProxy(server as Server, deps.db);
       const appWebSocket = attachAppWebSocket(server as Server, deps);
       server.on("error", (err) => {

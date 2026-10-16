@@ -22,7 +22,7 @@ function rowByAddress(
     .from(romeSessions)
     .where(
       and(
-        eq(romeSessions.type, "channel"),
+        isChannelConversation,
         eq(romeSessions.sourceChannel, service),
         eq(romeSessions.sourceThreadId, conversationId),
       ),
@@ -66,23 +66,30 @@ export class ConversationSettingsRepository {
   }
 
   /** Create if missing, then mutate one aggregate in one SQLite transaction. Callers
-   * serialize by address before entering this method. */
+   * serialize by address before entering this method. `channel` is the name of
+   * the channel the conversation belongs to, which a service's later channels
+   * do not share with it. */
   mutate(
     descriptor: ConversationDescriptor,
+    channel: string,
     input: {
       settings: StoredConversationSettings | null;
       agentName: string | null | undefined;
     },
   ): void {
+    // A webchat address is a guardian chat, which has no conversation settings.
+    if (descriptor.service === "webchat") {
+      throw new Error("Webchat chats have no conversation settings");
+    }
     this.db.transaction((tx) => {
       const sourceThreadType = descriptor.kind === "dm" ? "private" : descriptor.kind;
       const parentSessionId = descriptor.parent
-        ? (rowByAddress(tx, descriptor.service, descriptor.parent.conversationId)?.id ?? null)
+        ? (rowByAddress(tx, channel, descriptor.parent.conversationId)?.id ?? null)
         : null;
       const now = new Date();
       tx.insert(romeSessions)
         .values({
-          id: channelConversationId(descriptor.service, descriptor.ref.conversationId),
+          id: channelConversationId(channel, descriptor.ref.conversationId),
           name: descriptor.displayName,
           personaId: null,
           projectName: DEFAULT_WEBCHAT_PROJECT_NAME,
@@ -90,7 +97,7 @@ export class ConversationSettingsRepository {
           largeModelSelection: null,
           agentName: null,
           type: "channel",
-          sourceChannel: descriptor.service,
+          sourceChannel: channel,
           sourceThreadId: descriptor.ref.conversationId,
           sourceThreadName: descriptor.displayName,
           sourceThreadType,
@@ -103,17 +110,17 @@ export class ConversationSettingsRepository {
         .onConflictDoNothing({ target: romeSessions.id })
         .run();
 
-      const current = rowByAddress(tx, descriptor.service, descriptor.ref.conversationId);
+      const current = rowByAddress(tx, channel, descriptor.ref.conversationId);
       if (!current) {
         throw new Error(
-          `Failed to resolve conversation ${descriptor.service}:${descriptor.ref.conversationId}`,
+          `Failed to resolve conversation ${channel}:${descriptor.ref.conversationId}`,
         );
       }
 
       tx.update(romeSessions)
         .set({
           name: descriptor.displayName,
-          sourceChannel: descriptor.service,
+          sourceChannel: channel,
           sourceThreadName: descriptor.displayName,
           sourceThreadType,
           parentSessionId,

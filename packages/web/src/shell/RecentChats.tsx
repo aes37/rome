@@ -26,7 +26,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { RomeConfirmDialog } from "@/components/rome-confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { deleteSession, listSessions, renameSession } from "@/lib/chat-api";
+import { deleteSession, listSessions, renameSession, type SessionScope } from "@/lib/chat-api";
 import type { ChatSession } from "@/lib/chat-types";
 import { chatSearchShortcutForPlatform } from "@/lib/chat-search-shortcut";
 import { activeSessionFromPath, sessionActivityTime } from "@/lib/chat-session";
@@ -139,8 +139,14 @@ function ChatStatusGlyph({ status }: { status: ChatRowStatus }) {
 type LoadPhase = "loading" | "ready" | "error";
 type StatusFilter = "all" | "active" | "archived";
 
+const SCOPE_STORAGE_KEY = "rome-recent-chats-scope";
 const STATUS_FILTER_STORAGE_KEY = "rome-recent-chats-status-filter";
 const COLLAPSED_GROUPS_STORAGE_KEY = "rome-recent-chats-collapsed-groups";
+
+function readScope(): SessionScope {
+  if (typeof window === "undefined") return "all";
+  return window.localStorage.getItem(SCOPE_STORAGE_KEY) === "mine" ? "mine" : "all";
+}
 
 function readStatusFilter(): StatusFilter {
   if (typeof window === "undefined") return "active";
@@ -222,6 +228,7 @@ export function RecentChats({ onSearch }: RecentChatsProps) {
   const location = useLocation();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [phase, setPhase] = useState<LoadPhase>("loading");
+  const [scope, setScope] = useState<SessionScope>(() => readScope());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => readStatusFilter());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() =>
     readStringSetFromStorage(COLLAPSED_GROUPS_STORAGE_KEY),
@@ -240,18 +247,26 @@ export function RecentChats({ onSearch }: RecentChatsProps) {
   // response can be older than an event that arrived while it was in flight,
   // so the stream's word wins over the row's.
   const liveRunning = useRef(new Map<string, boolean>());
+  // Only the latest request may update the list or phase, including event-driven refetches.
+  const listRequest = useRef(0);
   const loadSessions = useCallback(async () => {
+    const request = ++listRequest.current;
     try {
-      const data = await listSessions(statusFilter);
+      const data = await listSessions(statusFilter, scope);
+      if (request !== listRequest.current) return;
       setSessions(data.map((s) => withLiveRunning(s, liveRunning.current)));
       setPhase("ready");
     } catch {
+      if (request !== listRequest.current) return;
       setPhase("error");
     }
-  }, [statusFilter]);
+  }, [statusFilter, scope]);
 
   useEffect(() => {
     void loadSessions();
+    return () => {
+      listRequest.current += 1;
+    };
   }, [loadSessions]);
 
   useSessionsChanged(() => {
@@ -296,6 +311,11 @@ export function RecentChats({ onSearch }: RecentChatsProps) {
       JSON.stringify(Array.from(collapsedGroups)),
     );
   }, [collapsedGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SCOPE_STORAGE_KEY, scope);
+  }, [scope]);
 
   const pinnedChats = useMemo(
     () =>
@@ -614,6 +634,23 @@ export function RecentChats({ onSearch }: RecentChatsProps) {
                 />
               </DropdownMenuTrigger>
               <DropdownMenuContent side="bottom" align="end" className="min-w-[180px]">
+                {[
+                  { value: "all" as const, label: t("recentChats.allChats") },
+                  { value: "mine" as const, label: t("recentChats.myChats") },
+                ].map(({ value, label }) => (
+                  <DropdownMenuItem
+                    key={value}
+                    onSelect={() => setScope(value)}
+                    className={
+                      scope === value ? "text-ui text-foreground" : "text-ui text-foreground/85"
+                    }
+                  >
+                    <span>{label}</span>
+                    {scope === value ? (
+                      <Check className="ml-auto h-3.5 w-3.5 text-subtle-foreground" aria-hidden />
+                    ) : null}
+                  </DropdownMenuItem>
+                ))}
                 <div className="px-2 pb-1 pt-1 text-aux text-subtle-foreground">
                   {t("recentChats.status")}
                 </div>

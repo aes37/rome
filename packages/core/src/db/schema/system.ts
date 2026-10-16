@@ -6,12 +6,15 @@ import {
   uniqueIndex,
   real,
   primaryKey,
+  type SQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 import type { AgentInputState, StoredConversationSettings } from "@rome-os/app-runtime";
 import type { OutboxMessage } from "@rome/api-types/people";
+import type { SessionActor } from "../../lib/session-actor.js";
 import type { UsageEvent } from "../../usage/events.js";
 import { TURN_FEEDBACK_RATINGS } from "@rome/api-types/trace-segments";
+import { MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 import {
   APPROVAL_EXECUTION_STATES,
   APPROVAL_STATUSES,
@@ -465,10 +468,23 @@ export const projectSyncLinks = sqliteTable("project_sync_links", {
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });
 
+/**
+ * Whether a `rome_sessions` row is a guardian chat: a channel row on the
+ * webchat channel. The chat indexes below use it as their WHERE, and
+ * `isWebchatChat` in `db/session-kind.ts` is the same text, which is what lets
+ * SQLite page the sidebar off them. That needs the constants inlined rather
+ * than bound, and the unary `+` keeps SQLite off the `source_channel` indexes,
+ * which would find the chats but then sort them all.
+ */
+export function webchatChatWhere(table: { type: SQLiteColumn; sourceChannel: SQLiteColumn }) {
+  return sql`(${table.type} = 'channel' and +${table.sourceChannel} = 'webchat')`;
+}
+
 export const romeSessions = sqliteTable(
   "rome_sessions",
   {
     id: text("id").primaryKey(),
+    ownerKey: text("owner_key"),
     name: text("name").notNull(),
     personaId: text("persona_id"),
     largeModelSelection: text("large_model_selection"),
@@ -518,20 +534,15 @@ export const romeSessions = sqliteTable(
     lastSeenActivityAt: integer("last_seen_activity_at", { mode: "timestamp" }),
   },
   (table) => [
+    index("idx_rome_sessions_owner_key").on(table.ownerKey),
     index("idx_rome_sessions_project_path").on(table.projectPath),
-    index("idx_rome_sessions_sidebar_activity").on(
-      table.type,
-      table.activityAt,
-      table.createdAt,
-      table.id,
-    ),
-    index("idx_rome_sessions_project_activity").on(
-      table.projectPath,
-      table.type,
-      table.activityAt,
-      table.createdAt,
-      table.id,
-    ),
+    // Sidebar paging for guardian chats. See `webchatChatWhere`.
+    index("idx_rome_sessions_chat_activity")
+      .on(table.activityAt, table.createdAt, table.id)
+      .where(webchatChatWhere(table)),
+    index("idx_rome_sessions_chat_project_activity")
+      .on(table.projectPath, table.activityAt, table.createdAt, table.id)
+      .where(webchatChatWhere(table)),
     index("idx_rome_sessions_source_channel").on(table.sourceChannel),
     index("idx_rome_sessions_source_thread").on(table.sourceChannel, table.sourceThreadId),
     index("idx_rome_sessions_channel_address")
@@ -679,6 +690,7 @@ export const romeAgentMessages = sqliteTable(
     sessionId: text("session_id").notNull(),
     turnId: text("turn_id"),
     inputState: text("input_state").$type<AgentInputState>(),
+    actor: text("actor", { mode: "json" }).$type<SessionActor>(),
     role: text("role").notNull(), // 'user' | 'assistant' | 'notification' | 'trace'
     content: text("content").notNull(), // JSON array of blocks
     platformMessageId: text("platform_message_id"),
@@ -854,17 +866,43 @@ export const executionJournal = sqliteTable(
   ],
 );
 
-// One row per minted Connection. The many-to-many grant ledger lives in
-// `connection_grants` below, keyed by custody (the connectionId).
-export const connections = sqliteTable(
-  "connections",
+// One row per minted Connection. A Service may hold several. The many-to-many
+// grant ledger lives in `connection_grants` below, keyed by custody (the
+// connectionId).
+export const connections = sqliteTable("connections", {
+  id: text("id").primaryKey(),
+  service: text("service").notNull(),
+  label: text("label").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+});
+
+// One row per channel a Connection backs: Rome's presence on a platform, with
+// an id minted once and never changed. The first channel of a service takes
+// the service's name as its id, and later ones get an opaque id. A row
+// outlives its Connection, unbacked and unlinked, so the service's next
+// Connection takes it back. `agent` is the linked agent's canonical id.
+// `platform` is stored, not derived on read, so the partial unique index can
+// hold that on one platform an agent other than main is linked to at most one
+// channel; a row keeps the platform it was minted on. Main is exempt, since
+// it answers a platform's bot and its signed-in user at once.
+export const channels = sqliteTable(
+  "channels",
   {
     id: text("id").primaryKey(),
     service: text("service").notNull(),
-    label: text("label").notNull(),
+    platform: text("platform").notNull(),
+    connectionId: text("connection_id"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    agent: text("agent"),
   },
-  (table) => [uniqueIndex("connections_service_unique").on(table.service)],
+  (table) => [
+    uniqueIndex("channels_connection_unique").on(table.connectionId),
+    uniqueIndex("channels_platform_agent_unique")
+      .on(table.platform, table.agent)
+      .where(
+        sql`${table.agent} IS NOT NULL AND ${table.agent} <> ${sql.raw(`'${MAIN_AGENT_ID}'`)}`,
+      ),
+  ],
 );
 
 // The grant ledger. Rows record outcomes only — never step/flow state

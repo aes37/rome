@@ -53,7 +53,7 @@ const definitions = [
   {
     id: "coding",
     displayName: "Coding",
-    version: "0.3.1",
+    version: "0.3.2",
     description:
       "The coding agent, the app_creation skill, and a frontend gallery of live UI mocks. Use app_creation when visuals are important, such as for apps, dashboards, games, and other Rome experiences that need a polished UI.",
     hasFrontend: true,

@@ -6,9 +6,11 @@
 // placeholders (`id: null`) so a fresh install still renders the full catalog.
 // The projection speaks registry vocabulary (GrantState / CapabilityStatus)
 // verbatim; identity only ever crosses through the descriptor's `reviveProfile`
-// hook, so no service-owned profile field name is known here. No POST — minting
-// stays in the connect setup.
+// hook, so no service-owned profile field name is known here. Minting stays in
+// the connect setup, except a later account of a service, which
+// `POST /connections` mints before its setup runs.
 
+import type { ConnectionAccountFields } from "@rome/api-types/channel-accounts";
 import { Hono } from "hono";
 import { isSameOriginMutationRequest } from "../../lib/mutation-origin.js";
 import { isEnabledOAuthProvider, isOAuthProvider } from "../../lib/oauth-providers.js";
@@ -25,6 +27,10 @@ import type {
   GrantState,
 } from "../../connections/types.js";
 import type { SetupManager } from "../../connections/setup/manager.js";
+import {
+  ChannelRecordsRepository,
+  type ChannelRecord,
+} from "../../db/repositories/channel-records.js";
 import type { ApiDeps } from "../deps.js";
 import { requireConnectionRegistry } from "../helpers.js";
 
@@ -64,7 +70,8 @@ interface ConnectHint {
   unavailableReason: string | null;
 }
 
-interface ConnectionView {
+interface ConnectionView
+  extends Required<Pick<ConnectionAccountFields, "channel" | "severalAccounts">> {
   /** Ledger connection id, or null for an offerable placeholder — a registered
    *  service the guardian has never connected (nothing to address or tear down
    *  yet; the connect setup mints the row). */
@@ -116,6 +123,7 @@ function buildConnectionView(
   conn: Connection,
   records: Map<GrantName, GrantRecord>,
   manager: SetupManager | null,
+  channel: ChannelRecord | null,
 ): ConnectionView {
   const revive = registry.getDescriptor(conn.service)?.reviveProfile;
   const grants = conn.auth.grants();
@@ -143,6 +151,8 @@ function buildConnectionView(
     capabilities: conn.status(),
     connect: connectHint(conn.service),
     setups: activeSetups(manager, conn.id, Object.keys(grants)),
+    channel: channel?.id ?? null,
+    severalAccounts: registry.getDescriptor(conn.service)?.severalAccounts === true,
   };
 }
 
@@ -170,8 +180,15 @@ async function serializeConnection(
   registry: ConnectionRegistry,
   conn: Connection,
   manager: SetupManager | null,
+  channels: ChannelRecordsRepository,
 ): Promise<ConnectionView> {
-  return buildConnectionView(registry, conn, await loadGrantRecords(registry, conn), manager);
+  return buildConnectionView(
+    registry,
+    conn,
+    await loadGrantRecords(registry, conn),
+    manager,
+    channels.byConnection(conn.id),
+  );
 }
 
 /** An offerable placeholder: a registered service with no connection row yet.
@@ -215,6 +232,8 @@ function placeholderView(
     },
     connect: connectHint(service),
     setups: activeSetups(manager, service, grantNames),
+    channel: null,
+    severalAccounts: descriptor.severalAccounts === true,
   };
 }
 
@@ -243,12 +262,13 @@ export function connectionsRoutes(deps: ApiDeps): Hono {
 
   const findConnection = (registry: ConnectionRegistry, id: string): Connection | undefined =>
     registry.all().find((c) => c.id === id);
+  const channels = new ChannelRecordsRepository(deps.db);
 
   app.get("/connections", async (c) => {
     const registry = requireConnectionRegistry(deps);
     const manager = deps.setupManager ?? null;
     const connected = await Promise.all(
-      registry.all().map((conn) => serializeConnection(registry, conn, manager)),
+      registry.all().map((conn) => serializeConnection(registry, conn, manager, channels)),
     );
     // Stable ordering for the UI: by service, then label, then id — the
     // registry's own iteration order is insertion-dependent. Placeholders sort
@@ -271,7 +291,13 @@ export function connectionsRoutes(deps: ApiDeps): Hono {
     c.header("Cache-Control", "no-store");
     return c.json({
       connection: {
-        ...buildConnectionView(registry, conn, records, deps.setupManager ?? null),
+        ...buildConnectionView(
+          registry,
+          conn,
+          records,
+          deps.setupManager ?? null,
+          channels.byConnection(conn.id),
+        ),
         grantDetails: buildGrantDetails(conn, records),
       },
     });
@@ -288,7 +314,21 @@ export function connectionsRoutes(deps: ApiDeps): Hono {
     if (!talker || (grant !== undefined && !talker.needs.includes(grant))) return undefined;
     return (tx) => {
       deps.approvalsRepo.supersedePairings(conn.id, tx);
-      deps.personMappingRepo.writeDeleteGuardianChannelMappings(tx, conn.service);
+      // Guardian links are keyed by service, so they stay while another
+      // Connection of the service still has every Talk grant conferred: the
+      // guardian can still reach Rome through that bot. A degraded grant
+      // counts, since its credential is still held and the link is needed when
+      // it recovers. Backing a channel does not count, because a channel stays
+      // bound to its Connection after Talk is revoked and hears no one then.
+      // The grant states are read through `tx`, so a teardown of the other
+      // Connection that commits first is seen here.
+      // This assumes a user's id is the same through every bot of the
+      // service. Where ids are per app (Feishu's open_id), a link paired only
+      // through the removed bot stays behind and never matches again.
+      const stillTalks =
+        registry.getLedger().connectionsHoldingIn(tx, conn.service, talker.needs, conn.id).length >
+        0;
+      if (!stillTalks) deps.personMappingRepo.writeDeleteGuardianChannelMappings(tx, conn.service);
     };
   };
 
@@ -316,8 +356,33 @@ export function connectionsRoutes(deps: ApiDeps): Hono {
     c.header("Cache-Control", "no-store");
     return c.json({
       ok: true,
-      connection: await serializeConnection(registry, conn, deps.setupManager ?? null),
+      connection: await serializeConnection(registry, conn, deps.setupManager ?? null, channels),
     });
+  });
+
+  // Add another account of a service: mint a Connection with no grant yet,
+  // and with it the channel it will back. The dashboard then runs the
+  // service's ordinary setup against the new id. A Connection of the service
+  // that no setup has ever filled is handed back instead, so an abandoned setup
+  // or a double click does not leave another empty account behind.
+  app.post("/connections", async (c) => {
+    if (!isSameOriginMutationRequest(c.req.raw)) {
+      return c.json({ error: "Cross-site requests are not allowed." }, 403);
+    }
+    const registry = requireConnectionRegistry(deps);
+    const body = await c.req.json<{ service?: unknown } | null>().catch(() => null);
+    const service = typeof body?.service === "string" ? body.service : "";
+    if (registry.getDescriptor(service)?.severalAccounts !== true) {
+      return c.json({ error: `"${service}" does not offer another account.` }, 400);
+    }
+    const { connection: conn, minted } = await registry.connectUnusedOrAnother(service);
+    c.header("Cache-Control", "no-store");
+    return c.json(
+      {
+        connection: await serializeConnection(registry, conn, deps.setupManager ?? null, channels),
+      },
+      minted ? 201 : 200,
+    );
   });
 
   app.delete("/connections/:id", async (c) => {

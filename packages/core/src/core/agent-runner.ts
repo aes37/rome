@@ -8,6 +8,7 @@ import type { AgentSessionManager } from "./agent-session.js";
 import type { AgentLoader } from "./agent-loader.js";
 import { createLogger } from "../logger.js";
 import type { WebChatRepository } from "../db/repositories/webchat.js";
+import { channelConversationId } from "../db/session-kind.js";
 import type { AgentTurnStreamRegistry } from "./agent-turn-stream-registry.js";
 import {
   AgentTraceRecorder,
@@ -147,12 +148,16 @@ export interface ModelSessionParams {
   workingDir?: string;
   externalMcpServers?: Record<string, McpServerConfig>;
   /**
-   * The session identifier; `isNewSession` selects whether the provider
-   * treats it as fresh or as a resumed session. (Resume vs. new is a generic
-   * streaming-provider concept — not Anthropic-specific.)
+   * The session identifier, a bare UUID. The Anthropic provider passes a new
+   * session's id to Claude Code as `--session-id`, which rejects anything
+   * else.
    */
   sessionId: string;
-  /** When true, treat `sessionId` as a fresh id; otherwise resume it. */
+  /**
+   * When true, the provider has never seen `sessionId`, so it may use it as
+   * the new conversation's id. When false, the id may already be taken, and
+   * the provider resumes only through `providerThreadId`.
+   */
   isNewSession?: boolean;
   /**
    * Provider-specific thread/session id from a previous session, used for
@@ -723,7 +728,7 @@ export class AgentRunner {
       const parentSessionId =
         recorded?.id ??
         thread?.romeSessionId ??
-        (thread ? `channel:${thread.channel}:${thread.threadId}` : null);
+        (thread ? channelConversationId(thread.channel, thread.threadId) : null);
       const parent =
         recorded ?? (parentSessionId ? await this.webchatRepo.getSession(parentSessionId) : null);
       const parentName = parent?.name ?? thread?.threadName ?? params.sourceSessionId;

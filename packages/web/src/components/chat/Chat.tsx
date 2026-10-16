@@ -118,6 +118,7 @@ import {
   useWorkspaceContextRegistry,
 } from "@/pages/free/workspace-context";
 import { applyAgentPlacement } from "@/pages/free/use-free-cells";
+import { randomUUID } from "@/lib/random-uuid";
 
 // Leave a jumped-to question clear of the top edge — flush against it reads
 // as cut off.
@@ -272,6 +273,12 @@ export interface ChatProps {
   onSessionCreated?: (sessionId: string) => void;
   /** Rendered in place of the transcript while the chat has no session. */
   emptyState?: ReactNode;
+  /**
+   * Centers the draft's empty state and composer as one group from `md` up,
+   * instead of docking the composer at the bottom. For an empty state that is
+   * only a short greeting, which would otherwise float far above the composer.
+   */
+  centerDraftComposer?: boolean;
   /** Draft seeds for the composer, read when it mounts. */
   initialProjectName?: string;
   initialAgentMention?: AgentMention | null;
@@ -287,6 +294,7 @@ export function Chat({
   onSessionMessage,
   onSessionCreated,
   emptyState,
+  centerDraftComposer = false,
   initialProjectName,
   initialAgentMention,
   composerRef: hostComposerRef,
@@ -1300,7 +1308,7 @@ export function Chat({
       const turnsForSession = inflightTurnsRef.current.get(sendingSessionId) ?? new Set<string>();
 
       const userMsg: ChatMessage = {
-        id: createResp.inputId ?? immediateInputId ?? crypto.randomUUID(),
+        id: createResp.inputId ?? immediateInputId ?? randomUUID(),
         sessionId: sendingSessionId,
         turnId: pendingTurnId,
         inputState: createResp.inputState ?? (createResp.inputId ? "queued" : undefined),
@@ -2073,6 +2081,14 @@ export function Chat({
                   )}
                 </div>
               </div>
+              {/* Pairs with the empty state's `md:flex-auto`. Both use auto basis,
+                  so the free space splits evenly above and below the greeting and
+                  composer; a 0 basis (`flex-1`) on either side puts them off-center.
+                  Phones keep the docked composer, where the keyboard owns the
+                  bottom of the screen. */}
+              {centerDraftComposer && !mainSessionId ? (
+                <div aria-hidden data-draft-center-spacer className="hidden flex-auto md:block" />
+              ) : null}
             </div>
             <ChatTimelineRail
               scroller={scrollerEl}

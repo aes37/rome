@@ -307,6 +307,20 @@ export interface ConnectionDescriptor {
   /** Grant-state-driven custody of out-of-process artifacts (token files, shell
    *  auth). Omitted by services with no such artifact — most descriptors. */
   custody?: GrantCustody;
+  /** True when the guardian can add another account of this service, each
+   *  with its own Connection and channel. A service that keeps its stores or
+   *  adapter state under one channel, or is a single presence by nature
+   *  (webchat, email), leaves it unset. Vocabulary:
+   *  docs/concepts/messaging.md#channels. */
+  severalAccounts?: boolean;
+  /** The platform account a grant's profile names (a bot id, an app id), or
+   *  null when the profile names none. It reads the one field rather than
+   *  parsing the strict profile schema, so a stored profile with an extra key
+   *  still names its account.
+   *  `ConnectionRegistry.confer` refuses a conferral whose account another
+   *  Connection of the service already holds in the same grant. A service that
+   *  leaves it unset is never refused. */
+  accountIdOf?(grant: GrantName, profile: ProfileRecord): string | null;
   capabilities: Partial<{
     talker: {
       needs: readonly GrantName[];

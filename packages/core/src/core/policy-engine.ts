@@ -3,6 +3,7 @@ import type { PolicyContext } from "@rome-os/app-runtime";
 import type { Policy, PolicyRule, PolicyScope } from "../types.js";
 import type { PoliciesRepository } from "../db/repositories/policies.js";
 import type { SettingsRepository } from "../db/repositories/settings.js";
+import type { ServiceOfChannel } from "../db/repositories/channel-records.js";
 
 export type { PolicyContext } from "@rome-os/app-runtime";
 
@@ -32,6 +33,7 @@ export class PolicyEngine {
   constructor(
     private policiesRepo: PoliciesRepository,
     private settingsRepo: SettingsRepository,
+    private serviceOf: ServiceOfChannel,
   ) {}
 
   /**
@@ -104,12 +106,20 @@ export class PolicyEngine {
       }
     }
 
-    for (const policy of channel) {
-      const scope = policy.scope as Extract<PolicyScope, { type: "channel" }>;
-      if (scope.channel === context.channel && policy.rules.length > 0) {
-        const rule = policy.rules[0];
-        recordPolicyDecision(context, rule, "channel");
-        return rule;
+    // A policy on a later channel's own name wins; one on its service covers
+    // it otherwise, as People keys an account by service. Most installs have
+    // no channel policy, so the service is only looked up when one exists.
+    const service = channel.length > 0 ? this.serviceOf(context.channel) : context.channel;
+    for (const name of service !== context.channel
+      ? [context.channel, service]
+      : [context.channel]) {
+      for (const policy of channel) {
+        const scope = policy.scope as Extract<PolicyScope, { type: "channel" }>;
+        if (scope.channel === name && policy.rules.length > 0) {
+          const rule = policy.rules[0];
+          recordPolicyDecision(context, rule, "channel");
+          return rule;
+        }
       }
     }
 
