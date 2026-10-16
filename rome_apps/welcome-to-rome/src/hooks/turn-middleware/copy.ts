@@ -26,6 +26,8 @@ export interface WelcomeCopy {
   buildBrief(idea: AppIdea): string;
   /** A picked idea with no AI connected: the build waits as a draft in a new chat. */
   pickedIdeaDraft(idea: AppIdea): string;
+  /** The same, from an older card that drafted while an AI was connected. */
+  pickedIdeaDraftReady(idea: AppIdea): string;
   finishedNoPick: string;
   /** Closes the welcome, as its own message after the first-app build. */
   finishedAfterBuild: string;
@@ -65,6 +67,7 @@ export function copyFor(locale: WelcomeLocale): WelcomeCopy {
     pickedIdea: (idea) => formatMessage(copy.pickedIdea, { title: idea.title }),
     buildBrief: (idea) => formatMessage(copy.buildBrief, { prompt: idea.prompt }),
     pickedIdeaDraft: (idea) => formatMessage(copy.pickedIdeaDraft, { title: idea.title }),
+    pickedIdeaDraftReady: (idea) => formatMessage(copy.pickedIdeaDraftReady, { title: idea.title }),
     finishedNoPick: copy.finishedNoPick,
     finishedAfterBuild: copy.finishedAfterBuild,
     alreadyDone: copy.alreadyDone,

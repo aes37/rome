@@ -1730,8 +1730,15 @@ export function Chat({
       onSubmitAppComponent: handleSubmitAppComponent,
       onDismissAppComponent: handleDismissAppComponent,
       interactionResults,
+      mainAgentName: mainAgentIdentity.name,
     }),
-    [refreshActiveSession, handleSubmitAppComponent, handleDismissAppComponent, interactionResults],
+    [
+      refreshActiveSession,
+      handleSubmitAppComponent,
+      handleDismissAppComponent,
+      interactionResults,
+      mainAgentIdentity.name,
+    ],
   );
 
   // Keyed by (session, turn) so dismissal naturally clears when the turn

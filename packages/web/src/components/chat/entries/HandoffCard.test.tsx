@@ -26,4 +26,31 @@ describe("HandoffCard", () => {
     expect(screen.getByTestId("avatar").getAttribute("data-icon")).toBe(icon);
     expect(screen.getByTestId("avatar").parentElement?.textContent).toContain("Nova");
   });
+
+  it("names a handoff to the main agent with the guardian's current name for it", () => {
+    render(
+      <HandoffCard
+        appId="welcome-to-rome"
+        agentName="core:main"
+        agentLabel="Nova"
+        mainAgentName="Spark"
+        status="open"
+      />,
+    );
+    expect(screen.getByTestId("avatar").parentElement?.textContent).toContain("Spark");
+    expect(screen.getByTestId("avatar").parentElement?.textContent).not.toContain("Nova");
+  });
+
+  it("keeps a specialist's own label", () => {
+    render(
+      <HandoffCard
+        appId="coding"
+        agentName="coding:builder"
+        agentLabel="Builder"
+        mainAgentName="Spark"
+        status="open"
+      />,
+    );
+    expect(screen.getByTestId("avatar").parentElement?.textContent).toContain("Builder");
+  });
 });

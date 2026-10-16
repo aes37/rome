@@ -22,6 +22,8 @@ const en = {
       "{{prompt}}\n\nIf you need to ask me anything, ask with the ask_question tool, not in plain text.",
     pickedIdeaDraft:
       "Let's build \"{{title}}\". I've opened a fresh chat with the kickoff prompt ready. Send it once an AI is connected.",
+    pickedIdeaDraftReady:
+      "Let's build \"{{title}}\". I've opened a fresh chat with the kickoff prompt ready. Send it whenever you like.",
     finishedAfterBuild:
       "You're all set. Explore a little: check out the built-in apps on the [Apps page](/apps), and the App Store for more. Welcome aboard.",
     finishedNoPick:

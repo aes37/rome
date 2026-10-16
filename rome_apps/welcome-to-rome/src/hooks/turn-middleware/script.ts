@@ -381,7 +381,10 @@ export async function runTurn(prompt: string, fx: WelcomeEffects): Promise<TurnR
       // into this chat. The welcome ends here.
       if (readResolutionJson(userText)?.openedDraft === true) {
         fx.progress.patch({ node: "done", completedAt: now() });
-        return { kind: "text", text: language.copy.pickedIdeaDraft(idea) };
+        const text = p.aiConnected
+          ? language.copy.pickedIdeaDraftReady(idea)
+          : language.copy.pickedIdeaDraft(idea);
+        return { kind: "text", text };
       }
       // Without an AI the guardian's agent can't run the build. A pick typed
       // instead of clicked opened nothing, so the picker comes back to open

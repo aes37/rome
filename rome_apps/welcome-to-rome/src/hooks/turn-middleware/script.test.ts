@@ -337,10 +337,10 @@ describe("runTurn — done", () => {
   });
 
   it.each([
-    ["shown without an AI", false],
+    ["shown without an AI", false, "Send it once an AI is connected."],
     // A card from before the build moved into this chat drafts even with an AI.
-    ["from before the build moved into this chat", true],
-  ])("finishes the welcome when a card %s opened a drafted chat", async (_label, aiConnected) => {
+    ["from before the build moved into this chat", true, "Send it whenever you like."],
+  ])("finishes the welcome when a card %s opened a drafted chat", async (_label, aiConnected, send) => {
     const { fx, getRow } = makeEffects("await_idea", {
       aiConnected,
       ideas: [{ title: "Launch tracker", prompt: "Build me a launch tracker." }],
@@ -352,6 +352,7 @@ describe("runTurn — done", () => {
       kind: "text",
       text: expect.stringContaining("I've opened a fresh chat with the kickoff prompt ready"),
     });
+    if (reply.kind === "text") expect(reply.text).toContain(send);
     expect(getRow().node).toBe("done");
     expect(getRow().buildPrompt).toBeNull();
   });

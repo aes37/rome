@@ -14,6 +14,9 @@ export interface HandoffCardProps {
   appId: string;
   agentName?: string;
   agentLabel?: string;
+  // The guardian's current name for the main agent. A handoff to the main
+  // agent shows it in place of the label the calling app sent.
+  mainAgentName?: string;
   // The brief the calling agent handed off — shown as its @mention content.
   summary?: string;
   status: HandoffStatus;
@@ -29,8 +32,18 @@ const CLAMP_LINES = 6;
 // render as ordinary rows right below — there is no separate thread. (Cancelling
 // an open handoff lives in the composer, where the floor is.) The chip is a
 // header line; the brief renders as markdown beneath it (clamped to CLAMP_LINES).
-export function HandoffCard({ appId, agentName, agentLabel, summary, status }: HandoffCardProps) {
-  const label = agentLabel || prettyAgentName(agentName ?? appId);
+export function HandoffCard({
+  appId,
+  agentName,
+  agentLabel,
+  mainAgentName,
+  summary,
+  status,
+}: HandoffCardProps) {
+  const label =
+    (isMainAgentName(agentName) && mainAgentName) ||
+    agentLabel ||
+    prettyAgentName(agentName ?? appId);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   // maxHeight is the clamp ceiling (CLAMP_LINES line-heights); overflowing is
