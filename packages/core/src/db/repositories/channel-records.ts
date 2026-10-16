@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { isMainAgent, LINKABLE_SERVICES, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
+import { LINKABLE_SERVICES, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { isCoreMainAgentId } from "../../apps/artifact-id.js";
 import { platformOf } from "../../channels/platform.js";
 import { channels } from "../schema.js";
 import { inTransaction, type DrizzleDb, type DrizzleTx } from "../index.js";
@@ -199,7 +200,7 @@ export class ChannelRecordsRepository {
    * link; unlinking is always open.
    */
   link(id: string, requested: string | null): LinkOutcome {
-    const agent = requested !== null && isMainAgent(requested) ? MAIN_AGENT_ID : requested;
+    const agent = requested !== null && isCoreMainAgentId(requested) ? MAIN_AGENT_ID : requested;
     return this.db.transaction((tx) => {
       const row = tx.select().from(channels).where(eq(channels.id, id)).get();
       if (!row) throw new ChannelRecordNotFound(id);
