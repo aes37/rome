@@ -25,3 +25,12 @@ export function readResolutionJson(prompt: string): Record<string, unknown> | nu
 export function isDismissedInteraction(prompt: string): boolean {
   return prompt.includes("dismissed the interaction");
 }
+
+/** Detect an interaction resolution: core's preamble followed by the fenced
+ *  result, as opposed to a typed message that happens to contain JSON. */
+export function isInteractionResult(prompt: string): boolean {
+  return (
+    prompt.startsWith("The interaction the guardian was working in resolved with this result:") &&
+    readResolutionJson(prompt) !== null
+  );
+}

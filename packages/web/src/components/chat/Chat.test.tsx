@@ -179,6 +179,31 @@ rs.mock("@/components/chat/ChatComposer", () => ({
           }
         />
       ) : null}
+      {props.onSend ? (
+        <button
+          type="button"
+          data-testid="send-agent-button"
+          onClick={() =>
+            void props
+              .onSend?.(
+                {
+                  text: "hi",
+                  uploads: [],
+                  reasoningEffort: "medium",
+                  projectPath: "",
+                  agentMention: {
+                    appId: "welcome-to-rome",
+                    appLabel: "Welcome to Rome",
+                    agentName: "welcome-to-rome:welcome-to-rome",
+                    iconUrl: "/api/apps/welcome-to-rome/icon",
+                  },
+                },
+                { onUploadProgress: () => {}, signal: new AbortController().signal },
+              )
+              .catch(() => {})
+          }
+        />
+      ) : null}
     </div>
   ),
 }));
@@ -1294,5 +1319,34 @@ describe("Chat draft", () => {
     // The send registered its local follow before the render that adopted the
     // session, so the reattach poll never looks the turn up.
     expect(listSessionTurns).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["drops", true],
+    ["keeps", false],
+  ])("%s the picked agent's name once the new chat's agent loads, by whether it speaks as the main agent", async (_label, presentsAsMain) => {
+    rs.mocked(createSession).mockResolvedValueOnce({ id: "created-1" } as Awaited<
+      ReturnType<typeof createSession>
+    >);
+    rs.mocked(postSessionTurn).mockResolvedValueOnce({ ok: true, data: { turnId: "turn-1" } });
+    // The created session's agent has loaded: speaking as the main agent, it
+    // reports no mention of its own.
+    mockUseSessionIdentity.mockImplementation((sessionId: string | null | undefined) => ({
+      sessionName: null,
+      pinnedAgentMention: null,
+      archivedAt: null,
+      presentsAsMain: !!sessionId && presentsAsMain,
+    }));
+    renderChat(<Chat emptyState={<p>Empty home</p>} />);
+
+    fireEvent.click(screen.getByTestId("send-agent-button"));
+
+    await waitFor(() => expect(openTurnStream).toHaveBeenCalledTimes(1));
+    if (presentsAsMain) {
+      expect(screen.queryByText("Welcome to Rome")).toBeNull();
+      expect(screen.getByText("sidebar.newChat")).toBeTruthy();
+    } else {
+      expect(screen.getByText("Welcome to Rome")).toBeTruthy();
+    }
   });
 });

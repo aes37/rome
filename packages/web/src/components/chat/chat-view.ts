@@ -218,10 +218,17 @@ function buildInteractionResults(messages: ChatMessage[]): Map<string, Record<st
   return map;
 }
 
+/**
+ * `mainIdentity` speaks for the root session, whichever agent it runs.
+ * `mainAgentIdentity` is the guardian's own main agent, which a handoff to it
+ * speaks as. Without it, such a handoff uses its own label and the main
+ * agent's avatar.
+ */
 export function buildChatView(
   messages: Map<string, ChatMessage[]>,
   mainSessionId: string,
   mainIdentity: AgentIdentity,
+  mainAgentIdentity?: AgentIdentity,
 ): ChatView {
   const messagesBySession = new Map<string, ChatMessage[]>();
   // Trace placement no longer needs a reorder: rows are grouped by turn and a
@@ -244,7 +251,7 @@ export function buildChatView(
     identityBySession.set(
       h.childSessionId,
       isMainAgentName(h.agentName)
-        ? mainIdentity
+        ? (mainAgentIdentity ?? { name: h.agentLabel, iconUrl: null })
         : { name: h.agentLabel, iconUrl: `/api/apps/${encodeURIComponent(h.appId)}/icon` },
     );
   }

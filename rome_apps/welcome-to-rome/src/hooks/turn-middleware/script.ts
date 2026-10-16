@@ -22,7 +22,7 @@ import type {
 import { encodeIdeas } from "../../db/repositories/progress.js";
 import { genericIdeas, introQuestionFor } from "../../i18n/locales/index.js";
 import { guardianLanguageInstruction, type WelcomeLocale } from "../../locale.js";
-import { isDismissedInteraction, readResolutionJson } from "./resolution.js";
+import { isDismissedInteraction, isInteractionResult, readResolutionJson } from "./resolution.js";
 import type { AskQuestion } from "./component.js";
 
 const MEMORY_AGENT = "welcome-memory";
@@ -184,6 +184,7 @@ const FRESH_PROGRESS = {
   appIdeas: null,
   appIdeasGeneratedAt: null,
   aiConnected: null,
+  buildPrompt: null,
   buildSessionId: null,
   completedAt: null,
 } as const;
@@ -199,28 +200,34 @@ export function isBuilderAgent(agentName: string): boolean {
   return agentName === BUILDER_AGENT;
 }
 
+const WEBCHAT_THREAD_KEY = /^webchat:([^:#]+)$/;
+
+/** The webchat chat a session key names, or null for any other channel and
+ *  for a subagent or fork nested under a chat. */
+export function webchatThreadId(channelThreadKey: string): string | null {
+  return WEBCHAT_THREAD_KEY.exec(channelThreadKey)?.[1] ?? null;
+}
+
 /**
  * Whether a turn belongs to the onboarding build while onboarding waits on it.
- * The build's first turn carries one of the offered ideas' kickoff prompts,
- * which the handoff seeds. Once that turn starts, its chat is the build chat,
- * and every later turn there belongs to the build too.
+ * The build runs in a webchat chat, and its first turn carries the picked
+ * idea's kickoff prompt, which the handoff seeds. Once that turn starts, its
+ * chat is the build chat, and every later turn there belongs to the build too.
  */
 export function isOnboardingBuildTurn(
   progress: WelcomeProgress,
-  locale: WelcomeLocale,
-  turn: { agentName: string; sessionId: string; prompt: string },
+  turn: { agentName: string; threadId: string | null; prompt: string },
 ): boolean {
   if (!isBuilderAgent(turn.agentName) || progress.node !== "building") return false;
-  if (progress.buildSessionId) return progress.buildSessionId === turn.sessionId;
-  const ideas = progress.ideas.length > 0 ? progress.ideas : genericIdeas(locale);
-  return ideas.some(
-    (idea) => idea.prompt.trim() !== "" && turn.prompt.includes(idea.prompt.trim()),
-  );
+  if (!turn.threadId) return false;
+  if (progress.buildSessionId) return progress.buildSessionId === turn.threadId;
+  const buildPrompt = progress.buildPrompt?.trim();
+  return !!buildPrompt && turn.prompt.includes(buildPrompt);
 }
 
 /** Record the chat that builds the first app, on the build's first turn. */
-export function startBuild(progress: ProgressRepository, sessionId: string): void {
-  if (!progress.get().buildSessionId) progress.patch({ buildSessionId: sessionId });
+export function startBuild(progress: ProgressRepository, threadId: string): void {
+  if (!progress.get().buildSessionId) progress.patch({ buildSessionId: threadId });
 }
 
 /**
@@ -232,11 +239,11 @@ export function startBuild(progress: ProgressRepository, sessionId: string): voi
 export function finishAfterBuild(
   progress: ProgressRepository,
   locale: WelcomeLocale,
-  sessionId: string,
+  threadId: string,
   outcome: TurnOutcome,
 ): string | null {
   const current = progress.get();
-  if (current.node !== "building" || current.buildSessionId !== sessionId) return null;
+  if (current.node !== "building" || current.buildSessionId !== threadId) return null;
   if (outcome.status !== "completed" || outcome.suspended) return null;
   progress.patch({ node: "done", completedAt: new Date().toISOString() });
   return copyFor(locale).finishedAfterBuild;
@@ -337,7 +344,7 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
       }
       // The build carries on in this chat: the guardian's agent takes the floor
       // with the idea's kickoff prompt as its brief.
-      fx.progress.patch({ node: "building" });
+      fx.progress.patch({ node: "building", buildPrompt: idea.prompt });
       return {
         kind: "handoff",
         lead: language.copy.pickedIdea(idea),
@@ -362,7 +369,7 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
         return namesReply(fx, language);
       }
       // The build handoff ending after the closing message has nothing to add.
-      if (isDismissedInteraction(userText) || readResolutionJson(userText)) {
+      if (isDismissedInteraction(userText) || isInteractionResult(userText)) {
         return { kind: "none" };
       }
       return { kind: "text", text: language.copy.alreadyDone };

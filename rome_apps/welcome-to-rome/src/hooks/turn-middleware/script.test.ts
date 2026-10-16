@@ -4,6 +4,7 @@ import {
   isOnboardingBuildTurn,
   runTurn,
   startBuild,
+  webchatThreadId,
   type WelcomeEffects,
 } from "./script.js";
 import type { ProgressRepository, WelcomeProgress } from "../../db/repositories/progress.js";
@@ -18,6 +19,7 @@ function makeEffects(node: WelcomeProgress["node"], overrides: Partial<WelcomePr
     ideas: [],
     ideasGeneratedAt: null,
     aiConnected: null,
+    buildPrompt: null,
     buildSessionId: null,
     completedAt: null,
     ...overrides,
@@ -52,6 +54,9 @@ function makeEffects(node: WelcomeProgress["node"], overrides: Partial<WelcomePr
 
 /** Wrap an object as the fenced JSON resolution prompt core feeds back. */
 const resolution = (obj: unknown) => `\`\`\`json\n${JSON.stringify(obj)}\n\`\`\``;
+/** The same result with the preamble core puts before it. */
+const resolved = (obj: unknown) =>
+  `The interaction the guardian was working in resolved with this result:\n\n${resolution(obj)}\n\nContinue based on this result.`;
 const DISMISSED = "The guardian dismissed the interaction without producing a result.";
 
 describe("runTurn — greeting and the name card", () => {
@@ -312,6 +317,7 @@ describe("runTurn — done", () => {
     expect(reply.brief).toBe("Build me a launch tracker.");
     // Not finished yet: the welcome closes after the build turn.
     expect(getRow().node).toBe("building");
+    expect(getRow().buildPrompt).toBe("Build me a launch tracker.");
     expect(getRow().completedAt).toBeNull();
   });
 
@@ -326,35 +332,46 @@ describe("runTurn — done", () => {
     expect(getRow().completedAt).toEqual(expect.any(String));
   });
 
-  it("recognizes the build's first turn by the picked idea's prompt", () => {
-    const ideas = [{ title: "Launch tracker", prompt: "Build me a launch tracker." }];
-    const { getRow } = makeEffects("building", { ideas });
+  it("recognizes the build's first turn by the picked idea's prompt, in a webchat chat", () => {
+    const { getRow } = makeEffects("building", {
+      ideas: [
+        { title: "Launch tracker", prompt: "Build me a launch tracker." },
+        { title: "Habit garden", prompt: "Build me a habit garden." },
+      ],
+      buildPrompt: "Build me a launch tracker.",
+    });
     const turn = {
       agentName: "core:main",
-      sessionId: "build-chat",
+      threadId: "build-chat",
       prompt: "Build me a launch tracker.",
     };
 
-    expect(isOnboardingBuildTurn(getRow(), "en", turn)).toBe(true);
-    // Another agent, another prompt, or a finished welcome is ordinary chat.
-    expect(isOnboardingBuildTurn(getRow(), "en", { ...turn, agentName: "notes:writer" })).toBe(
+    expect(isOnboardingBuildTurn(getRow(), turn)).toBe(true);
+    // Another offered idea, another agent, another prompt, another channel, or
+    // a finished welcome is ordinary chat.
+    expect(isOnboardingBuildTurn(getRow(), { ...turn, prompt: "Build me a habit garden." })).toBe(
       false,
     );
-    expect(isOnboardingBuildTurn(getRow(), "en", { ...turn, prompt: "Add a dark mode." })).toBe(
-      false,
-    );
-    expect(isOnboardingBuildTurn({ ...getRow(), node: "done" }, "en", turn)).toBe(false);
+    expect(isOnboardingBuildTurn(getRow(), { ...turn, agentName: "notes:writer" })).toBe(false);
+    expect(isOnboardingBuildTurn(getRow(), { ...turn, prompt: "Add a dark mode." })).toBe(false);
+    expect(isOnboardingBuildTurn(getRow(), { ...turn, threadId: null })).toBe(false);
+    expect(isOnboardingBuildTurn({ ...getRow(), node: "done" }, turn)).toBe(false);
+  });
+
+  it("reads the chat from a webchat key only", () => {
+    expect(webchatThreadId("webchat:chat-1")).toBe("chat-1");
+    expect(webchatThreadId("telegram:42")).toBeNull();
+    expect(webchatThreadId("webchat:chat-1:subagent:abc")).toBeNull();
+    expect(webchatThreadId("webchat:chat-1#fork:abc")).toBeNull();
   });
 
   it("counts every later turn in the build chat, and no other chat", () => {
     const { fx, getRow } = makeEffects("building");
     startBuild(fx.progress, "build-chat");
-    const later = { agentName: "core:main", sessionId: "build-chat", prompt: "Use a table." };
+    const later = { agentName: "core:main", threadId: "build-chat", prompt: "Use a table." };
 
-    expect(isOnboardingBuildTurn(getRow(), "en", later)).toBe(true);
-    expect(isOnboardingBuildTurn(getRow(), "en", { ...later, sessionId: "other-chat" })).toBe(
-      false,
-    );
+    expect(isOnboardingBuildTurn(getRow(), later)).toBe(true);
+    expect(isOnboardingBuildTurn(getRow(), { ...later, threadId: "other-chat" })).toBe(false);
   });
 
   it("ends the welcome after a build turn that finished, with the explore message", () => {
@@ -399,12 +416,14 @@ describe("runTurn — done", () => {
     const { fx } = makeEffects("done", { completedAt: "2026-01-01" });
 
     expect(await runTurn(DISMISSED, fx)).toEqual({ kind: "none" });
-    expect(await runTurn(resolution({ summary: "done" }), fx)).toEqual({ kind: "none" });
-    // A typed message still gets the reminder.
-    expect(await runTurn("hello again", fx)).toMatchObject({
-      kind: "text",
-      text: expect.stringContaining("already finished"),
-    });
+    expect(await runTurn(resolved({ summary: "done" }), fx)).toEqual({ kind: "none" });
+    // A typed message still gets the reminder, even one with a JSON snippet.
+    for (const typed of ["hello again", `Why does this fail?\n${resolution({ a: 1 })}`]) {
+      expect(await runTurn(typed, fx)).toMatchObject({
+        kind: "text",
+        text: expect.stringContaining("already finished"),
+      });
+    }
   });
 
   it("uses the Chinese fallback title without changing the English one", async () => {

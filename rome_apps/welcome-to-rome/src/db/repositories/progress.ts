@@ -31,6 +31,8 @@ export interface WelcomeProgress {
   ideasGeneratedAt: string | null;
   /** Null until the connect-AI step resolves. */
   aiConnected: boolean | null;
+  /** The picked idea's kickoff prompt, once the guardian has picked one. */
+  buildPrompt: string | null;
   /** The chat building the first app, once its first turn has started. */
   buildSessionId: string | null;
   completedAt: string | null;
@@ -43,6 +45,7 @@ const EMPTY: WelcomeProgress = {
   ideas: [],
   ideasGeneratedAt: null,
   aiConnected: null,
+  buildPrompt: null,
   buildSessionId: null,
   completedAt: null,
 };
@@ -54,6 +57,7 @@ interface ProgressPatch {
   appIdeas?: string | null;
   appIdeasGeneratedAt?: string | null;
   aiConnected?: boolean | null;
+  buildPrompt?: string | null;
   buildSessionId?: string | null;
   completedAt?: string | null;
 }
@@ -123,6 +127,7 @@ export class ProgressRepository {
       ideas: parseIdeas(row.appIdeas),
       ideasGeneratedAt: row.appIdeasGeneratedAt,
       aiConnected: row.aiConnected ?? null,
+      buildPrompt: row.buildPrompt ?? null,
       buildSessionId: row.buildSessionId ?? null,
       completedAt: row.completedAt,
     };
@@ -150,6 +155,8 @@ export class ProgressRepository {
           : (existing?.appIdeasGeneratedAt ?? null),
       aiConnected:
         patch.aiConnected !== undefined ? patch.aiConnected : (existing?.aiConnected ?? null),
+      buildPrompt:
+        patch.buildPrompt !== undefined ? patch.buildPrompt : (existing?.buildPrompt ?? null),
       buildSessionId:
         patch.buildSessionId !== undefined
           ? patch.buildSessionId
@@ -176,6 +183,7 @@ export class ProgressRepository {
       ideas: parseIdeas(next.appIdeas),
       ideasGeneratedAt: next.appIdeasGeneratedAt,
       aiConnected: next.aiConnected,
+      buildPrompt: next.buildPrompt,
       buildSessionId: next.buildSessionId,
       completedAt: next.completedAt,
     };
@@ -198,6 +206,7 @@ export class ProgressRepository {
       appIdeas: null,
       appIdeasGeneratedAt: null,
       aiConnected: null,
+      buildPrompt: null,
       buildSessionId: null,
       completedAt: null,
     });

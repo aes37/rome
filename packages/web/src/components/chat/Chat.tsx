@@ -389,7 +389,9 @@ export function Chat({
   // The agent a draft's first send picked stands in until the new session's
   // identity loads, so its chip does not drop out when the composer locks.
   const [createdAgentMention, setCreatedAgentMention] = useState<AgentMention | null>(null);
-  const pinnedAgentMention = identityAgentMention ?? createdAgentMention;
+  // An agent that speaks as the main agent has no mention, so the draft's pick
+  // stops standing in once its identity loads.
+  const pinnedAgentMention = presentsAsMain ? null : (identityAgentMention ?? createdAgentMention);
   // Local override so archive/unarchive from the navbar flips the read-only
   // composer immediately; `undefined` defers to the session read (`archivedAt`).
   const [archivedOverride, setArchivedOverride] = useState<boolean | undefined>(undefined);
@@ -460,20 +462,25 @@ export function Chat({
   // of any open handoff. The whole merge / index / floor / identity derivation
   // lives in the pure `buildChatView`; here we just memoize it on the message
   // map, so a streaming turn (which never touches `messages`) never recomputes.
+  const mainAgentIdentity = useMemo<AgentIdentity>(
+    () => ({ name: mainAgentDisplayName?.trim() || t("roles.agent"), iconUrl: null }),
+    [mainAgentDisplayName, t],
+  );
   const mainIdentity = useMemo<AgentIdentity>(
-    () => ({
-      name: pinnedAgentMention
-        ? prettyAgentName(pinnedAgentMention.agentName)
-        : mainAgentDisplayName?.trim() || t("roles.agent"),
-      iconUrl: pinnedAgentMention?.iconUrl ?? null,
-    }),
-    [mainAgentDisplayName, pinnedAgentMention, t],
+    () =>
+      pinnedAgentMention
+        ? {
+            name: prettyAgentName(pinnedAgentMention.agentName),
+            iconUrl: pinnedAgentMention.iconUrl ?? null,
+          }
+        : mainAgentIdentity,
+    [mainAgentIdentity, pinnedAgentMention],
   );
   // A draft builds from the empty id: the view is empty and its floor is falsy,
   // which every session-keyed effect below already skips.
   const view = useMemo(
-    () => buildChatView(messages, mainSessionId ?? "", mainIdentity),
-    [messages, mainSessionId, mainIdentity],
+    () => buildChatView(messages, mainSessionId ?? "", mainIdentity, mainAgentIdentity),
+    [messages, mainSessionId, mainIdentity, mainAgentIdentity],
   );
   const { displayMessages, handoffList, floorSessionId, identityBySession, interactionResults } =
     view;

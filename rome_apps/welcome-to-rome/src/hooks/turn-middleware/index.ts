@@ -15,6 +15,7 @@ import {
   startBuild,
   type TurnReply,
   type WelcomeEffects,
+  webchatThreadId,
 } from "./script.js";
 import { emitComponent, emitAskQuestion, emitConnectAi, emitHandoff } from "./component.js";
 import type { SummonResult } from "./script.js";
@@ -80,9 +81,9 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
 
   async handle(ctx: TurnMiddlewareContext, next: TurnMiddlewareNext): Promise<void> {
     if (ctx.session.agentName !== `${this.deps.appId}:${AGENT_NAME}`) {
-      const isBuild = await this.claimBuildTurn(ctx);
+      const buildThreadId = await this.claimBuildTurn(ctx);
       const outcome = await next();
-      if (isBuild) await this.postClosingMessage(ctx, outcome);
+      if (buildThreadId) await this.postClosingMessage(ctx, buildThreadId, outcome);
       return;
     }
 
@@ -136,28 +137,24 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
     }
   }
 
-  /** Whether this turn belongs to the build of the guardian's first app, and
-   *  on the build's first turn, record its chat. Every agent's turns pass
-   *  through here, so anything but the builder returns before any read. A
-   *  failed check reads as no, so ordinary chat never depends on the welcome. */
-  private async claimBuildTurn(ctx: TurnMiddlewareContext): Promise<boolean> {
-    if (!isBuilderAgent(ctx.session.agentName)) return false;
+  /** When this turn belongs to the build of the guardian's first app, return
+   *  the build chat's id, and on the build's first turn, record it. Every
+   *  agent's turns pass through here, so anything but the builder in a webchat
+   *  chat returns before any read. A failed check reads as no, so ordinary
+   *  chat never depends on the welcome. */
+  private async claimBuildTurn(ctx: TurnMiddlewareContext): Promise<string | null> {
+    if (!isBuilderAgent(ctx.session.agentName)) return null;
+    const threadId = webchatThreadId(ctx.session.channelThreadKey);
     const db = this.deps.appContext?.db;
-    if (!db) return false;
+    if (!threadId || !db) return null;
     try {
       const progress = createProgressRepository(db);
-      const current = progress.get();
-      if (current.node !== "building") return false;
-      const turn = {
-        agentName: ctx.session.agentName,
-        sessionId: ctx.session.id,
-        prompt: ctx.input.prompt ?? "",
-      };
-      if (!isOnboardingBuildTurn(current, await this.getLocale(), turn)) return false;
-      startBuild(progress, ctx.session.id);
-      return true;
+      const turn = { agentName: ctx.session.agentName, threadId, prompt: ctx.input.prompt ?? "" };
+      if (!isOnboardingBuildTurn(progress.get(), turn)) return null;
+      startBuild(progress, threadId);
+      return threadId;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -166,16 +163,16 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
    *  reply, so the message goes through the chat's channel instead. */
   private async postClosingMessage(
     ctx: TurnMiddlewareContext,
+    threadId: string,
     outcome: TurnOutcome,
   ): Promise<void> {
     const appContext = this.deps.appContext;
     if (!appContext?.db) return;
-    const threadId = ctx.session.channelThreadKey.replace(/^webchat:/, "");
     try {
       const text = finishAfterBuild(
         createProgressRepository(appContext.db),
         await this.getLocale(),
-        ctx.session.id,
+        threadId,
         outcome,
       );
       if (!text) return;

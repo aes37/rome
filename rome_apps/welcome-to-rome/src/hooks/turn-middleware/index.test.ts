@@ -19,6 +19,7 @@ const progress: { row: WelcomeProgress } = {
     ideas: [{ title: "Launch tracker", prompt: "Build me a launch tracker." }],
     ideasGeneratedAt: null,
     aiConnected: true,
+    buildPrompt: "Build me a launch tracker.",
     buildSessionId: null,
     completedAt: null,
   },
@@ -46,10 +47,12 @@ function makeContext(
   agentName: string,
   emitted: AgentMessage[],
   prompt = "hello",
+  channelThreadKey = "webchat:chat-1",
 ): TurnMiddlewareContext {
   return {
     input: { prompt },
-    session: { id: "session-1", agentName, channelThreadKey: "webchat:session-1" },
+    // The agent session's id differs from the chat's id in its key.
+    session: { id: "agent-session-1", agentName, channelThreadKey },
     emit: (event) => emitted.push(event),
     meta: {},
   };
@@ -99,7 +102,13 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
   });
 
   function startBuilding() {
-    progress.row = { ...progress.row, node: "building", buildSessionId: null, completedAt: null };
+    progress.row = {
+      ...progress.row,
+      node: "building",
+      buildPrompt: IDEA,
+      buildSessionId: null,
+      completedAt: null,
+    };
   }
 
   function makeDeps(calls: string[]) {
@@ -130,7 +139,7 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
     expect(calls).toEqual(["model", "send_message"]);
     expect(runAction).toHaveBeenCalledWith("send_message", {
       channel: "webchat",
-      threadId: "session-1",
+      threadId: "chat-1",
       text: expect.stringContaining("App Store"),
     });
     expect(progress.row.node).toBe("done");
@@ -193,6 +202,19 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
     await createHook(deps).handle(makeContext("core:main", [], "Add a dark mode."), next);
 
     expect(next).toHaveBeenCalledOnce();
+    expect(runAction).not.toHaveBeenCalled();
+    expect(progress.row.node).toBe("building");
+  });
+
+  it("reads nothing for the main agent's turn outside a webchat chat", async () => {
+    startBuilding();
+    const { deps, runAction } = makeDeps([]);
+    const next = rs.fn(async () => finished);
+
+    await createHook(deps).handle(makeContext("core:main", [], IDEA, "telegram:42"), next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(repositoryOpened).not.toHaveBeenCalled();
     expect(runAction).not.toHaveBeenCalled();
     expect(progress.row.node).toBe("building");
   });
