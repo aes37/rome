@@ -19,13 +19,16 @@ const log = createLogger("linked-agents");
  * once per channel and agent, until that agent loads again.
  */
 export function linkedAgentResolver(
-  records: Pick<ChannelRecordsRepository, "byId" | "serviceOf">,
+  records: Pick<ChannelRecordsRepository, "byId">,
   agents: { has(name: string): boolean },
 ): NonNullable<ChannelMessageHookDeps["linkedAgentOf"]> {
   const warned = new Map<string, string>();
   return (channelName) => {
-    if (!LINKABLE_SERVICES.has(records.serviceOf(channelName))) return undefined;
-    const agent = records.byId(channelName)?.agent ?? null;
+    const record = records.byId(channelName);
+    // A service's first channel carries the service's name, so a channel with
+    // no record answers for its own service.
+    if (!LINKABLE_SERVICES.has(record?.service ?? channelName)) return undefined;
+    const agent = record?.agent ?? null;
     if (agent === null || isCoreMainAgentId(agent) || agents.has(agent)) {
       warned.delete(channelName);
       return agent;
