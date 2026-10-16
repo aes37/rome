@@ -128,13 +128,18 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
         const mw = chain[i];
         let nextCalled = false;
         let inner: Promise<void> | undefined;
+        let innerSettled = false;
         const next = async (): Promise<Outcome> => {
           if (nextCalled) {
             throw new Error(`${hookName} middleware (${mw.appId}) called next() more than once`);
           }
           nextCalled = true;
           inner = dispatch(i + 1);
-          await inner;
+          try {
+            await inner;
+          } finally {
+            innerSettled = true;
+          }
           return (await readOutcome?.()) as Outcome;
         };
         try {
@@ -145,8 +150,10 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
           );
           // A middleware that calls next() without awaiting it returns while
           // the layers inside it still run. Its layer ends when theirs do, and
-          // their failure is its own, as if it had awaited.
-          await inner;
+          // their failure is its own, as if it had awaited. One that returns
+          // after they finished has seen how they ended, so returning normally
+          // means it handled any failure, as `try { await next() } catch` does.
+          if (!innerSettled) await inner;
         } catch (err) {
           const mode = mw.hook.onError ?? "fail-open";
           if (mode === "fail-closed") {

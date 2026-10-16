@@ -743,9 +743,9 @@ export interface TurnOutcome {
 /** Continue the onion: rewrite-then-continue and post-process both call this;
  *  a short-circuiting middleware simply never does. Resolves once the layers
  *  inside have finished, with how they ended the turn. Hosts older than this
- *  type resolve it with nothing, so a middleware that may run on one should
- *  check the value before reading it. */
-export type TurnMiddlewareNext = () => Promise<TurnOutcome>;
+ *  type resolve it with nothing, which is why the value can be `undefined`:
+ *  check it before reading it. */
+export type TurnMiddlewareNext = () => Promise<TurnOutcome | undefined>;
 
 export interface TurnMiddlewareHook {
   /** Lowest order runs furthest out; the model layer is always innermost. */
