@@ -44,7 +44,7 @@ import { AgentAvatar } from "@/components/chat/AgentAvatar";
 import { SessionModelLabel } from "@/components/chat/SessionModelLabel";
 import { useSessionIdentity } from "@/components/chat/use-session-identity";
 import { useInvalidateSettings } from "@/hooks/use-settings";
-import { prettyAgentName } from "@/lib/agent-name";
+import { isMainAgentName, prettyAgentName } from "@/lib/agent-name";
 import { artifactLocalName } from "@/lib/artifact-name";
 import {
   buildChatView,
@@ -1606,13 +1606,15 @@ export function Chat({
   );
 
   // The composer's pinned chip = the floor agent (the specialist during a
-  // handoff, the main agent otherwise).
+  // handoff, the main agent otherwise). Its icon is the floor's identity, so a
+  // handoff to the main agent shows the main agent's name and avatar.
   const floorAgentMention: AgentMention | null = floorHandoff
     ? {
         appId: floorHandoff.appId,
         appLabel: floorHandoff.agentLabel,
         agentName: floorHandoff.agentName ?? floorHandoff.agentLabel,
-        iconUrl: `/api/apps/${encodeURIComponent(floorHandoff.appId)}/icon`,
+        iconUrl: floorIdentity.iconUrl,
+        ...(isMainAgentName(floorHandoff.agentName) ? { label: floorIdentity.name } : {}),
       }
     : pinnedAgentMention;
   // The floor's own (raw, chronological) messages drive the approve /

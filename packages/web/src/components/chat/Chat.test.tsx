@@ -135,8 +135,20 @@ rs.mock("@/components/chat/ChatComposer", () => ({
     onStop?: () => void;
     onSend?: (snapshot: unknown, controls: unknown) => Promise<void>;
     streamError?: string | { message: string } | null;
+    pinnedAgentMention?: { label?: string; iconUrl?: string | null } | null;
+    designingInteraction?: { onCancel?: () => void } | null;
   }) => (
     <div data-testid="chat-composer" data-streaming={props.isStreaming ? "true" : "false"}>
+      {props.pinnedAgentMention ? (
+        <div
+          data-testid="composer-agent"
+          data-label={props.pinnedAgentMention.label ?? ""}
+          data-icon={props.pinnedAgentMention.iconUrl ?? ""}
+        />
+      ) : null}
+      {props.designingInteraction?.onCancel ? (
+        <button type="button" data-testid="cancel-handoff" />
+      ) : null}
       {props.streamError ? (
         <div data-testid="stream-error">
           {typeof props.streamError === "string" ? props.streamError : props.streamError.message}
@@ -1260,6 +1272,51 @@ describe("Chat tab status", () => {
     await waitFor(() =>
       expect(mockUseChatTabStatus).toHaveBeenLastCalledWith(false, true, false, expect.any(Number)),
     );
+  });
+});
+
+describe("Chat handoff composer chip", () => {
+  afterEach(() => {
+    rs.mocked(listSessionMessages).mockResolvedValue([]);
+    rs.mocked(listSessionTurns).mockResolvedValue([{ turnId: "turn-1", status: "running" }]);
+  });
+
+  it.each([
+    ["the main agent's name and avatar", "core:main", "Nova", ""],
+    ["the specialist's own icon", "workflow-studio:planner", "", "/api/apps/workflow-studio/icon"],
+  ])("shows %s while a handoff holds the floor", async (_label, agentName, label, icon) => {
+    rs.mocked(listSessionTurns).mockResolvedValue([]);
+    rs.mocked(listSessionMessages).mockImplementation(async (sessionId: string) =>
+      sessionId === "session-1"
+        ? [
+            {
+              id: "m-handoff",
+              sessionId: "session-1",
+              turnId: "turn-1",
+              role: "assistant",
+              content: JSON.stringify([
+                {
+                  type: "handoff",
+                  toolUseId: "h1",
+                  appId: agentName === "core:main" ? "welcome-to-rome" : "workflow-studio",
+                  agentName,
+                  childSessionId: "child-1",
+                  payload: { agentLabel: "Planner" },
+                },
+              ]),
+              createdAt: "2026-10-05T00:00:00.000Z",
+            },
+          ]
+        : [],
+    );
+    renderChat(<Chat sessionId="session-1" mainAgentDisplayName="Nova" />);
+
+    await waitFor(() => expect(screen.getByTestId("composer-agent")).toBeTruthy());
+    const chip = screen.getByTestId("composer-agent");
+    expect(chip.getAttribute("data-label")).toBe(label);
+    expect(chip.getAttribute("data-icon")).toBe(icon);
+    // The chip still carries the handoff's cancel.
+    expect(screen.getByTestId("cancel-handoff")).toBeTruthy();
   });
 });
 

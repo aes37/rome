@@ -8,7 +8,8 @@ import type {
 } from "@rome-os/app-runtime";
 import { createProgressRepository } from "../../db/repositories/progress.js";
 import {
-  finishAfterBuild,
+  closingMessageAfterBuild,
+  finishBuild,
   isBuilderAgent,
   isOnboardingBuildTurn,
   runTurn,
@@ -27,6 +28,11 @@ const AGENT_NAME = "welcome-to-rome";
 /** Cap the inline idea brainstorm so a stuck specialist can't hang the turn —
  *  on timeout we fall back to generic starter ideas. */
 const SUMMON_TIMEOUT_MS = 90_000;
+
+/** How long the build turn's tail waits for the closing message to post. The
+ *  chat's next turn waits on this one, so a slow channel can't hold it up;
+ *  a post that lands later still ends onboarding. */
+const CLOSING_MESSAGE_TIMEOUT_MS = 10_000;
 
 // Typewriter pacing for narration. We stream each text block as incremental
 // `text_delta` previews before the whole `text` block, so the guardian sees it
@@ -76,6 +82,10 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
   // We catch our own failures and emit a scripted fallback, so the chain never
   // sees a throw — but declare fail-open so a bug can't ever break normal chat.
   readonly onError = "fail-open" as const;
+
+  // Build chats whose closing message is still posting, so a later turn there
+  // can't post it twice.
+  private readonly closingInFlight = new Set<string>();
 
   constructor(private readonly deps: TurnMiddlewareHookDeps) {}
 
@@ -159,40 +169,62 @@ class WelcomeTurnMiddleware implements TurnMiddlewareHook {
   }
 
   /** After a build turn, post the welcome's closing message as its own
-   *  message, once the build has finished. A turn's stream ends with its
-   *  reply, so the message goes through the chat's channel instead. */
+   *  message, once the build has finished, and end onboarding once it posts. A
+   *  turn's stream ends with its reply, so the message goes through the chat's
+   *  channel instead. A failed post leaves onboarding waiting on the build, so
+   *  the next finished turn there tries again. */
   private async postClosingMessage(
     ctx: TurnMiddlewareContext,
     threadId: string,
     outcome: TurnOutcome,
   ): Promise<void> {
     const appContext = this.deps.appContext;
-    if (!appContext?.db) return;
+    if (!appContext?.db || this.closingInFlight.has(threadId)) return;
+    const db = appContext.db;
+    const warn = (detail: Record<string, unknown>) =>
+      this.deps.logger.warn("welcome-to-rome could not post the closing message", {
+        sessionId: ctx.session.id,
+        ...detail,
+      });
+    let text: string | null;
     try {
-      const text = finishAfterBuild(
-        createProgressRepository(appContext.db),
+      text = closingMessageAfterBuild(
+        createProgressRepository(db).get(),
         await this.getLocale(),
         threadId,
         outcome,
       );
-      if (!text) return;
-      const sent = await appContext.runAction("send_message", {
-        channel: "webchat",
-        threadId,
-        text,
-      });
-      if (sent.status !== "ok") {
-        this.deps.logger.warn("welcome-to-rome could not post the closing message", {
-          sessionId: ctx.session.id,
-          status: sent.status,
-        });
-      }
     } catch (err) {
-      this.deps.logger.warn("welcome-to-rome could not post the closing message", {
-        sessionId: ctx.session.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      warn({ error: err instanceof Error ? err.message : String(err) });
+      return;
     }
+    if (!text) return;
+
+    this.closingInFlight.add(threadId);
+    const posting = (async () => {
+      try {
+        const sent = await appContext.runAction("send_message", {
+          channel: "webchat",
+          threadId,
+          text,
+        });
+        if (sent.status !== "ok") {
+          warn({ status: sent.status });
+          return;
+        }
+        finishBuild(createProgressRepository(db), threadId);
+      } catch (err) {
+        warn({ error: err instanceof Error ? err.message : String(err) });
+      } finally {
+        this.closingInFlight.delete(threadId);
+      }
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CLOSING_MESSAGE_TIMEOUT_MS);
+    });
+    await Promise.race([posting, timeout]);
+    clearTimeout(timer);
   }
 
   private makeEffects(ctx: TurnMiddlewareContext): WelcomeEffects {

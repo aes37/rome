@@ -16,6 +16,8 @@ const zhCN = {
     unexpectedError: "欢迎流程出了点问题，不过你可以直接开始和 Rome 聊天。",
     takeaway: "**我记住了什么**\n\n{{summary}}",
     pickedIdea: "我们来做「{{title}}」。",
+    pickedIdeaDraft:
+      "我们来做「{{title}}」。我已经打开了一个新的聊天，启动提示词准备好了，连接 AI 后发送即可。",
     finishedAfterBuild:
       "设置完成。四处看看吧：[应用页面](/apps)里有内置应用，应用商店里还有更多。欢迎加入。",
     finishedNoPick: "设置完成。想做点什么时，在新的聊天里告诉我你的想法就好。欢迎加入。",

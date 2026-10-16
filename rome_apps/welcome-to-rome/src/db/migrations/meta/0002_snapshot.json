@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a4b6b51f-b4b7-4ffb-ad71-696445c424e0",
+  "id": "d6706d4a-b95b-46f1-aca3-78b2dd6d6ad9",
   "prevId": "e8254bdc-4c98-4aec-b920-3563df5ee088",
   "tables": {
     "welcome_to_rome__progress": {
@@ -52,6 +52,13 @@
         "ai_connected": {
           "name": "ai_connected",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "build_prompt": {
+          "name": "build_prompt",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

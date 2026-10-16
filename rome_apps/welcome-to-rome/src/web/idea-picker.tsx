@@ -8,9 +8,10 @@ import { getWelcomeCopy } from "@/lib/copy";
 // The "pick your first app" card. props: `{ ideas: [{title, prompt}] }`. Each
 // idea renders as a shadcn Item (title + description, with a "Build this" action
 // on the right). "Build this" resolves the card and stays in this chat, where
-// the welcome hands the build to the guardian's agent. "I'll explore on my own"
-// submits the `EXPLORE` sentinel, which ends the welcome, and opens a fresh,
-// empty chat.
+// the welcome hands the build to the guardian's agent. With no AI connected
+// (`buildInChat: false`), it instead opens a fresh chat with the idea's kickoff
+// prompt in the composer, to send once one is. "I'll explore on my own" submits
+// the `EXPLORE` sentinel, which ends the welcome, and opens a fresh, empty chat.
 export const EXPLORE = "__explore__";
 
 interface Idea {
@@ -34,9 +35,12 @@ function IdeaPicker({ ctx }: { ctx: AppComponentContext }) {
   const copy = getWelcomeCopy(ctx.bootstrap.shell.locale);
   const ideas = readIdeas(ctx.props.ideas);
   const resolved = ctx.host.resolved;
+  // A card without the prop builds in this chat.
+  const buildInChat = ctx.props.buildInChat !== false;
 
   const build = (idea: Idea) => {
     ctx.host.submit({ ideaTitle: idea.title }, idea.title);
+    if (!buildInChat) navigateRome({ path: "chat/new", draft: idea.prompt });
   };
 
   // The submit posts the resolution first, so the welcome session records the

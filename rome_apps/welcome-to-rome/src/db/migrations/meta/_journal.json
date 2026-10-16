@@ -20,14 +20,7 @@
       "idx": 2,
       "version": "6",
       "when": 1792129908429,
-      "tag": "0002_build_session",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1792179147002,
-      "tag": "0003_build_prompt",
+      "tag": "0002_build_handoff",
       "breakpoints": true
     }
   ]

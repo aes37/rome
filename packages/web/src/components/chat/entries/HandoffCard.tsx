@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { prettyAgentName } from "@/lib/agent-name";
+import { isMainAgentName, prettyAgentName } from "@/lib/agent-name";
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
 import ChatMarkdown from "@/components/chat/ChatMarkdown";
 
@@ -64,7 +64,11 @@ export function HandoffCard({ appId, agentName, agentLabel, summary, status }: H
       <span className="inline-flex items-center gap-1 rounded-8 bg-primary/15 px-2 py-1 text-badge text-primary">
         @
         <AgentAvatar
-          iconUrl={`/api/apps/${encodeURIComponent(appId)}/icon`}
+          // A handoff to the main agent shows the main agent's avatar, as its
+          // messages do, not the calling app's icon.
+          iconUrl={
+            isMainAgentName(agentName) ? null : `/api/apps/${encodeURIComponent(appId)}/icon`
+          }
           label={label}
           className="size-4 shrink-0"
         />

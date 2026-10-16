@@ -18,6 +18,8 @@ const en = {
       "Something went wrong with the welcome — you can start chatting with Rome normally.",
     takeaway: "**What I took away**\n\n{{summary}}",
     pickedIdea: 'Let\'s build "{{title}}".',
+    pickedIdeaDraft:
+      "Let's build \"{{title}}\". I've opened a fresh chat with the kickoff prompt ready. Send it once an AI is connected.",
     finishedAfterBuild:
       "You're all set. Explore a little: check out the built-in apps on the [Apps page](/apps), and the App Store for more. Welcome aboard.",
     finishedNoPick:

@@ -171,11 +171,17 @@ function introQuestion(language: WelcomeLanguage): TurnReply {
   };
 }
 
-/** The "pick your first app" buttons. Each "Build this" resolves this turn and
- *  opens a fresh chat client-side with the prompt in the composer; the explore
- *  opt-out resolves with the EXPLORE sentinel and opens an empty chat. */
-function ideaPicker(ideas: AppIdea[]): TurnReply {
-  return { kind: "component", componentId: "idea-picker", props: { ideas } };
+/** The "pick your first app" buttons. With an AI connected, "Build this"
+ *  resolves this turn and the build carries on in this chat. Without one, it
+ *  also opens a fresh chat with the prompt in the composer, to send once an AI
+ *  is connected. The explore opt-out resolves with the EXPLORE sentinel and
+ *  opens an empty chat. */
+function ideaPicker(ideas: AppIdea[], aiConnected: boolean): TurnReply {
+  return {
+    kind: "component",
+    componentId: "idea-picker",
+    props: { ideas, buildInChat: aiConnected },
+  };
 }
 
 const FRESH_PROGRESS = {
@@ -230,23 +236,34 @@ export function startBuild(progress: ProgressRepository, threadId: string): void
   if (!progress.get().buildSessionId) progress.patch({ buildSessionId: threadId });
 }
 
+/** Whether onboarding still waits on the build in this chat, so the guardian
+ *  has neither closed the handoff nor started over. */
+function waitsOnBuild(progress: WelcomeProgress, threadId: string): boolean {
+  return progress.node === "building" && progress.buildSessionId === threadId;
+}
+
 /**
- * End onboarding after a turn of the build, and return the closing message to
- * post. Returns null, and changes nothing, when onboarding no longer waits on
- * this chat (the guardian closed the handoff or started over) or when the turn
- * did not finish: it was stopped, it failed, or it is parked on a card.
+ * The closing message to post after a turn of the build. Returns null when
+ * onboarding no longer waits on this chat or when the turn did not finish: it
+ * was stopped, it failed, or it is parked on a card. Onboarding ends only once
+ * the message is posted, through `finishBuild`.
  */
-export function finishAfterBuild(
-  progress: ProgressRepository,
+export function closingMessageAfterBuild(
+  progress: WelcomeProgress,
   locale: WelcomeLocale,
   threadId: string,
   outcome: TurnOutcome,
 ): string | null {
-  const current = progress.get();
-  if (current.node !== "building" || current.buildSessionId !== threadId) return null;
+  if (!waitsOnBuild(progress, threadId)) return null;
   if (outcome.status !== "completed" || outcome.suspended) return null;
-  progress.patch({ node: "done", completedAt: new Date().toISOString() });
   return copyFor(locale).finishedAfterBuild;
+}
+
+/** End onboarding after the closing message posted, unless the guardian closed
+ *  the handoff or started over while it was sending. */
+export function finishBuild(progress: ProgressRepository, threadId: string): void {
+  if (!waitsOnBuild(progress.get(), threadId)) return;
+  progress.patch({ node: "done", completedAt: new Date().toISOString() });
 }
 
 /**
@@ -341,6 +358,12 @@ export async function runTurn(userText: string, fx: WelcomeEffects): Promise<Tur
       if (!idea) {
         fx.progress.patch({ node: "done", completedAt: now() });
         return { kind: "text", text: language.copy.finishedNoPick };
+      }
+      // Without an AI the guardian's agent can't run the build, so the welcome
+      // ends here and the picker has opened a new chat with the idea's prompt.
+      if (!p.aiConnected) {
+        fx.progress.patch({ node: "done", completedAt: now() });
+        return { kind: "text", text: language.copy.pickedIdeaDraft(idea) };
       }
       // The build carries on in this chat: the guardian's agent takes the floor
       // with the idea's kickoff prompt as its brief.
@@ -448,7 +471,7 @@ async function staticIdeas(
     appIdeasGeneratedAt: now(),
   });
   await fx.say(language.copy.ideasOffline);
-  return ideaPicker(ideas);
+  return ideaPicker(ideas, fx.progress.get().aiConnected === true);
 }
 
 async function brainstormAppIdeas(
@@ -474,7 +497,7 @@ async function brainstormAppIdeas(
     appIdeasGeneratedAt: now(),
   });
   if (usedFallback) await fx.say(language.copy.ideasFailed);
-  return ideaPicker(ideas);
+  return ideaPicker(ideas, fx.progress.get().aiConnected === true);
 }
 
 /** Resolve which idea the guardian chose from the idea-picker's output (or, as a

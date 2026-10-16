@@ -21,9 +21,10 @@ export function readResolutionJson(prompt: string): Record<string, unknown> | nu
 }
 
 /** Detect a dismissed interaction (the guardian closed the card/handoff without
- *  producing a result). */
+ *  producing a result): core's dismissal prompt, as opposed to a typed message
+ *  that happens to use the phrase. */
 export function isDismissedInteraction(prompt: string): boolean {
-  return prompt.includes("dismissed the interaction");
+  return prompt.startsWith("The guardian dismissed the interaction");
 }
 
 /** Detect an interaction resolution: core's preamble followed by the fenced

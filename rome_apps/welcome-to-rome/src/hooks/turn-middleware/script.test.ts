@@ -1,6 +1,7 @@
 import { describe, expect, it, rs } from "@rstest/core";
 import {
-  finishAfterBuild,
+  closingMessageAfterBuild,
+  finishBuild,
   isOnboardingBuildTurn,
   runTurn,
   startBuild,
@@ -205,7 +206,8 @@ describe("runTurn — the one question", () => {
     );
 
     expect(fx.summon).not.toHaveBeenCalled();
-    expect(reply).toMatchObject({ componentId: "idea-picker" });
+    // With no AI to run the build, "Build this" opens a new chat with a draft.
+    expect(reply).toMatchObject({ componentId: "idea-picker", props: { buildInChat: false } });
     expect(reply.kind === "component" && reply.props.ideas).toEqual(
       expect.arrayContaining([expect.objectContaining({ title: "Mood diary" })]),
     );
@@ -238,7 +240,7 @@ describe("runTurn — the one question", () => {
     // Straight from the answer to the brainstorm, with no briefing step between.
     expect(fx.summon).toHaveBeenCalledWith("welcome-app-ideas", expect.any(String));
     expect(fx.say).toHaveBeenCalledWith("Got it. Brainstorming a few first apps for you…");
-    expect(reply).toMatchObject({ componentId: "idea-picker" });
+    expect(reply).toMatchObject({ componentId: "idea-picker", props: { buildInChat: true } });
     expect(getNode()).toBe("await_idea");
   });
 
@@ -300,6 +302,7 @@ describe("withEndPunctuation", () => {
 describe("runTurn — done", () => {
   it("hands the picked idea to the guardian's agent in this chat", async () => {
     const { fx, getRow } = makeEffects("await_idea", {
+      aiConnected: true,
       ideas: [{ title: "Launch tracker", prompt: "Build me a launch tracker." }],
     });
 
@@ -319,6 +322,22 @@ describe("runTurn — done", () => {
     expect(getRow().node).toBe("building");
     expect(getRow().buildPrompt).toBe("Build me a launch tracker.");
     expect(getRow().completedAt).toBeNull();
+  });
+
+  it("finishes the welcome with a drafted chat when no AI is connected", async () => {
+    const { fx, getRow } = makeEffects("await_idea", {
+      aiConnected: false,
+      ideas: [{ title: "Launch tracker", prompt: "Build me a launch tracker." }],
+    });
+
+    const reply = await runTurn(resolution({ ideaTitle: "Launch tracker" }), fx);
+
+    expect(reply).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("I've opened a fresh chat with the kickoff prompt ready"),
+    });
+    expect(getRow().node).toBe("done");
+    expect(getRow().buildPrompt).toBeNull();
   });
 
   it("finishes the welcome when the build handoff closes before the build turn ends", async () => {
@@ -374,17 +393,20 @@ describe("runTurn — done", () => {
     expect(isOnboardingBuildTurn(getRow(), { ...later, threadId: "other-chat" })).toBe(false);
   });
 
-  it("ends the welcome after a build turn that finished, with the explore message", () => {
+  it("closes after a build turn that finished, once the explore message posts", () => {
     const { fx, getRow } = makeEffects("building");
     startBuild(fx.progress, "build-chat");
 
-    const text = finishAfterBuild(fx.progress, "en", "build-chat", {
+    const text = closingMessageAfterBuild(getRow(), "en", "build-chat", {
       status: "completed",
       suspended: false,
     });
 
     expect(text).toContain("all set");
     expect(text).toContain("App Store");
+    // Onboarding ends only once the message posts.
+    expect(getRow().node).toBe("building");
+    finishBuild(fx.progress, "build-chat");
     expect(getRow().node).toBe("done");
     expect(getRow().completedAt).toEqual(expect.any(String));
   });
@@ -397,7 +419,7 @@ describe("runTurn — done", () => {
     const { fx, getRow } = makeEffects("building");
     startBuild(fx.progress, "build-chat");
 
-    expect(finishAfterBuild(fx.progress, "en", "build-chat", outcome)).toBeNull();
+    expect(closingMessageAfterBuild(getRow(), "en", "build-chat", outcome)).toBeNull();
     expect(getRow().node).toBe("building");
   });
 
@@ -405,10 +427,12 @@ describe("runTurn — done", () => {
     const finished = { status: "completed", suspended: false } as const;
     // The guardian closed the handoff while the build ran, which already closed the welcome.
     const closed = makeEffects("done", { buildSessionId: "build-chat" });
-    expect(finishAfterBuild(closed.fx.progress, "en", "build-chat", finished)).toBeNull();
+    expect(closingMessageAfterBuild(closed.getRow(), "en", "build-chat", finished)).toBeNull();
     // The guardian started over, and a new run is building in another chat.
     const restarted = makeEffects("building", { buildSessionId: "new-chat" });
-    expect(finishAfterBuild(restarted.fx.progress, "en", "build-chat", finished)).toBeNull();
+    expect(closingMessageAfterBuild(restarted.getRow(), "en", "build-chat", finished)).toBeNull();
+    // Nor does a post that lands after the guardian started over end the new run.
+    finishBuild(restarted.fx.progress, "build-chat");
     expect(restarted.getRow().node).toBe("building");
   });
 
@@ -417,8 +441,13 @@ describe("runTurn — done", () => {
 
     expect(await runTurn(DISMISSED, fx)).toEqual({ kind: "none" });
     expect(await runTurn(resolved({ summary: "done" }), fx)).toEqual({ kind: "none" });
-    // A typed message still gets the reminder, even one with a JSON snippet.
-    for (const typed of ["hello again", `Why does this fail?\n${resolution({ a: 1 })}`]) {
+    // A typed message still gets the reminder, even one with a JSON snippet or
+    // core's dismissal phrase.
+    for (const typed of [
+      "hello again",
+      `Why does this fail?\n${resolution({ a: 1 })}`,
+      "Why do I see 'dismissed the interaction' here?",
+    ]) {
       expect(await runTurn(typed, fx)).toMatchObject({
         kind: "text",
         text: expect.stringContaining("already finished"),
@@ -427,13 +456,13 @@ describe("runTurn — done", () => {
   });
 
   it("uses the Chinese fallback title without changing the English one", async () => {
-    const { fx } = makeEffects("await_idea");
+    const { fx } = makeEffects("await_idea", { aiConnected: true });
     rs.mocked(fx.getLocale).mockResolvedValue("zh-CN");
 
     const reply = await runTurn(resolution({ ideaTitle: "培养习惯" }), fx);
     expect(reply).toMatchObject({ kind: "handoff", lead: expect.stringContaining("「培养习惯」") });
 
-    const { fx: englishFx } = makeEffects("await_idea");
+    const { fx: englishFx } = makeEffects("await_idea", { aiConnected: true });
     const englishReply = await runTurn(resolution({ ideaTitle: "Habit garden" }), englishFx);
     expect(englishReply).toMatchObject({
       kind: "handoff",

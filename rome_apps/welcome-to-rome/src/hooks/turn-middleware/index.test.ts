@@ -166,6 +166,65 @@ describe("welcome-to-rome turn middleware after the onboarding build", () => {
     expect(progress.row.node).toBe("done");
   });
 
+  it("keeps waiting on the build when the post fails, and posts after the next finished turn", async () => {
+    startBuilding();
+    const { deps, runAction } = makeDeps([]);
+    runAction.mockResolvedValueOnce({ status: "error" });
+    const hook = createHook(deps);
+
+    await hook.handle(
+      makeContext("core:main", [], IDEA),
+      rs.fn(async () => finished),
+    );
+    expect(runAction).toHaveBeenCalledOnce();
+    expect(progress.row.node).toBe("building");
+
+    await hook.handle(
+      makeContext("core:main", [], "Rename it."),
+      rs.fn(async () => finished),
+    );
+    expect(runAction).toHaveBeenCalledTimes(2);
+    expect(progress.row.node).toBe("done");
+  });
+
+  it("lets the turn end while a slow post is still sending, and ends onboarding once it lands", async () => {
+    rs.useFakeTimers();
+    try {
+      startBuilding();
+      const { deps, runAction } = makeDeps([]);
+      let land: (result: { status: string }) => void = () => {};
+      runAction.mockImplementationOnce(
+        () => new Promise<{ status: string }>((resolve) => (land = resolve)),
+      );
+      const hook = createHook(deps);
+
+      let ended = false;
+      const turn = hook
+        .handle(
+          makeContext("core:main", [], IDEA),
+          rs.fn(async () => finished),
+        )
+        .then(() => (ended = true));
+      await rs.advanceTimersByTimeAsync(10_000);
+      await turn;
+      expect(ended).toBe(true);
+      expect(progress.row.node).toBe("building");
+
+      // A later finished turn doesn't post a second message while one is sending.
+      await hook.handle(
+        makeContext("core:main", [], "Rename it."),
+        rs.fn(async () => finished),
+      );
+      expect(runAction).toHaveBeenCalledOnce();
+
+      land({ status: "ok" });
+      await rs.advanceTimersByTimeAsync(0);
+      expect(progress.row.node).toBe("done");
+    } finally {
+      rs.useRealTimers();
+    }
+  });
+
   it("posts nothing when the guardian closes the handoff while the build runs", async () => {
     startBuilding();
     const { deps, runAction } = makeDeps([]);
