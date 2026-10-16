@@ -319,9 +319,15 @@ export default function AppsIndexPage() {
     setRemixTarget(null);
   };
   // Apps the launcher leaves out: first-party apps with nothing to open from
-  // here, and carrier apps (e.g. user-skills), which are installed plumbing.
+  // here, and carrier apps (e.g. user-skills), which are installed plumbing. A
+  // left-out first-party app comes back while it has an update, so the update
+  // that Update all counts has a tile behind it.
   const listedApps =
-    apps?.filter((app) => !isUnlistedBuiltin(app) && !isCarrierApp(app.id)) ?? null;
+    apps?.filter(
+      (app) =>
+        !isCarrierApp(app.id) &&
+        (!isUnlistedBuiltin(app) || lifecycle.freshCandidate(app) !== undefined),
+    ) ?? null;
 
   const normalizedQuery = query.trim().toLowerCase();
   const isSearching = normalizedQuery.length > 0;

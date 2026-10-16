@@ -370,6 +370,29 @@ describe("AppsIndexPage reactivity", () => {
     });
   });
 
+  it("shows a left-out first-party app while it has an update", async () => {
+    mockBackend({
+      installed: [
+        installedCard({ id: "assistant", displayName: "Assistant", origin: "builtin" }),
+        installedCard({ id: "inbox-agent", displayName: "Inbox Agent", origin: "builtin" }),
+      ],
+      upgradable: [
+        {
+          appId: "assistant",
+          currentVersion: "1.0.0",
+          availableVersion: "1.1.0",
+          targetSource: { mode: "bundle", path: "/sources/assistant" },
+        },
+      ],
+    });
+
+    renderPage();
+
+    const builtinSection = await screen.findByRole("region", { name: "Built-in apps" });
+    expect(await within(builtinSection).findByText("Assistant")).toBeTruthy();
+    expect(within(builtinSection).queryByText("Inbox Agent")).toBeNull();
+  });
+
   it("keeps a built-in app that isn't running, so the guardian can still fix it", async () => {
     mockBackend({
       installed: [
