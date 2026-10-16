@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, File, Folder, FolderKanban, MessageSquare } from "lucide-react";
 import { Pencil2Icon } from "@radix-ui/react-icons";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   EmptyState,
@@ -48,21 +48,53 @@ function useProjectFiles(path: string) {
   });
 }
 
+// The top level of the projects root, read only when the URL names no known
+// project: the Files page used to live at /projects, so an old link can name a
+// file there.
+function useProjectsRootEntries(enabled: boolean) {
+  const { t } = useTranslation("common");
+  return useQuery({
+    queryKey: ["chat-projects", "root-entries"],
+    enabled,
+    queryFn: () =>
+      fetchJson<FileBrowserTreeNode[]>("/api/projects/tree?path=projects&depth=1", {
+        fallback: t("projectsPage.filesLoadError"),
+      }),
+  });
+}
+
 // One project: its chats, newest first, with a way to start another in its
 // folder, beside the folder's top-level files.
 export default function ProjectDetailPage() {
   const { t } = useTranslation("common");
   const navigate = useNavigate();
+  const location = useLocation();
   const { projectPath = "" } = useParams<{ projectPath: string }>();
-  const { projects } = useChatProjects();
+  const { projects, error, refetch } = useChatProjects();
   const files = useProjectFiles(projectPath);
   const project = projects?.find((candidate) => candidate.path === projectPath) ?? null;
+  const unknownProject = projects !== null && project === null;
+  const rootEntries = useProjectsRootEntries(unknownProject);
   const name = project?.name ?? projectPath;
   useDocumentTitle(name);
 
   const startChat = () => navigate("/chat", { state: { projectPath } });
 
-  if (projects !== null && project === null && files.isError) {
+  const isRootFile = rootEntries.data?.some(
+    (entry) => entry.type === "file" && entry.path === `projects/${projectPath}`,
+  );
+  if (isRootFile) {
+    return (
+      <Navigate
+        to={`${filesHrefForProject(projectPath)}${location.search}${location.hash}`}
+        replace
+      />
+    );
+  }
+  // Wait for the root check before calling the project missing.
+  if (unknownProject && files.isError && rootEntries.isPending) return null;
+
+  if (unknownProject && files.isError) {
     return (
       <Page>
         <EmptyState role="status">
@@ -80,7 +112,8 @@ export default function ProjectDetailPage() {
     );
   }
 
-  const chats = project?.chats ?? null;
+  // A folder with no record and no chats yet is an empty project.
+  const chats = projects === null ? null : (project?.chats ?? []);
 
   return (
     <Page>
@@ -112,7 +145,16 @@ export default function ProjectDetailPage() {
               <SectionTitle id="project-chats-heading">{t("projectsPage.chats")}</SectionTitle>
             </SectionHeading>
           </SectionHeader>
-          {chats === null ? (
+          {error && projects === null ? (
+            <EmptyState role="alert">
+              <EmptyStateTitle>{t("projectsPage.loadError")}</EmptyStateTitle>
+              <EmptyStateAction>
+                <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+                  {t("projectsPage.retry")}
+                </Button>
+              </EmptyStateAction>
+            </EmptyState>
+          ) : chats === null ? (
             <div className="flex flex-col gap-1" aria-busy>
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-4/5" />

@@ -96,7 +96,7 @@ export default function ProjectsIndexPage() {
       return;
     }
     try {
-      const path = await createChatProject(name, t("projectsPage.createFailed"));
+      const path = await createChatProject(name);
       closeCreate();
       await invalidate();
       navigate(projectHref(path));

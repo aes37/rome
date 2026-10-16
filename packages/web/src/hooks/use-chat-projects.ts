@@ -1,18 +1,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { useTranslation } from "react-i18next";
-import { listSessions } from "@/lib/chat-api";
+import { createProject, listProjects, listSessions } from "@/lib/chat-api";
 import { DEFAULT_PROJECT_NAME } from "@/lib/chat-constants";
-import type { ChatSession } from "@/lib/chat-types";
-import type { FileBrowserTreeNode } from "@/lib/file-browser-tree";
-import { fetchJson } from "@/lib/fetch-json";
+import type { ChatSession, ProjectOption } from "@/lib/chat-types";
 import { sessionActivityTime } from "@/lib/chat-session";
 import { useSessionsChanged } from "@/lib/session-events";
 
 /**
- * A project is a folder under the `projects` root, together with the chats
- * scoped to it. The folder is the project: its files are the project's
- * knowledge (the Files page), and a chat started in it works in that folder.
+ * A project is one of core's project records, the list the composer's project
+ * picker offers, together with the chats scoped to it. Each record owns a
+ * folder under the `projects` root: its files are the project's knowledge (the
+ * Files page), and a chat started in it works in that folder.
  */
 export interface ChatProject {
   /** Relative to the projects root, as chats carry it: `website-redesign`. */
@@ -24,7 +22,6 @@ export interface ChatProject {
   activityAt: string | null;
 }
 
-const PROJECTS_ROOT = "projects";
 const CHAT_PROJECTS_QUERY_KEY = ["chat-projects"] as const;
 
 export function projectNameFromPath(path: string): string {
@@ -47,23 +44,23 @@ export function projectHref(path: string): string {
   return `/projects/${encodeURIComponent(path)}`;
 }
 
-async function loadChatProjects(fallback: string): Promise<ChatProject[]> {
-  const [nodes, sessions] = await Promise.all([
-    fetchJson<FileBrowserTreeNode[]>(
-      `/api/projects/tree?path=${encodeURIComponent(PROJECTS_ROOT)}&depth=1`,
-      { fallback },
-    ),
-    listSessions("active"),
-  ]);
+/** A record's path relative to the projects root, as chats carry it. */
+function recordPath(project: ProjectOption): string {
+  return project.projectPath || project.name;
+}
+
+async function loadChatProjects(): Promise<ChatProject[]> {
+  const [catalog, sessions] = await Promise.all([listProjects(), listSessions("active")]);
 
   const byPath = new Map<string, ChatSession[]>();
-  for (const node of nodes) {
-    if (node.type !== "directory") continue;
-    byPath.set(node.path.slice(PROJECTS_ROOT.length + 1), []);
+  const names = new Map<string, string>();
+  for (const project of catalog.projects) {
+    const path = recordPath(project);
+    byPath.set(path, []);
+    if (project.displayName) names.set(path, project.displayName);
   }
-  // A chat can name a project whose folder the tree did not list (a folder
-  // made outside the root's top level, or one being created), so the chats
-  // add projects as well as fill them.
+  // A chat can name a project with no record (one from before records, or
+  // one being created), so the chats add projects as well as fill them.
   for (const session of sessions) {
     const path = projectPathForChat(session);
     const chats = byPath.get(path) ?? [];
@@ -76,7 +73,7 @@ async function loadChatProjects(fallback: string): Promise<ChatProject[]> {
       chats.sort((a, b) => sessionActivityTime(b) - sessionActivityTime(a));
       return {
         path,
-        name: projectNameFromPath(path),
+        name: names.get(path) ?? projectNameFromPath(path),
         chats,
         activityAt: chats[0]?.activityAt ?? null,
       };
@@ -90,11 +87,10 @@ async function loadChatProjects(fallback: string): Promise<ChatProject[]> {
 }
 
 export function useChatProjects() {
-  const { t } = useTranslation("common");
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: CHAT_PROJECTS_QUERY_KEY,
-    queryFn: () => loadChatProjects(t("projectsPage.loadError")),
+    queryFn: loadChatProjects,
   });
   const invalidate = useCallback(
     () => queryClient.invalidateQueries({ queryKey: CHAT_PROJECTS_QUERY_KEY }),
@@ -111,12 +107,8 @@ export function useChatProjects() {
   };
 }
 
-/** Creates the project's folder. Resolves to the new project's path. */
-export async function createChatProject(name: string, fallback: string): Promise<string> {
-  const result = await fetchJson<{ path?: string; error?: string }>("/api/projects/file", {
-    method: "POST",
-    json: { path: `${PROJECTS_ROOT}/${name}`, type: "folder" },
-    fallback,
-  });
-  return (result.path ?? `${PROJECTS_ROOT}/${name}`).slice(PROJECTS_ROOT.length + 1);
+/** Creates the project's record and folder through core, the same path the
+ *  composer's picker uses. Resolves to the new project's path. */
+export async function createChatProject(name: string): Promise<string> {
+  return recordPath(await createProject(name));
 }
