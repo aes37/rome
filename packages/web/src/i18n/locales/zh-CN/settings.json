@@ -370,6 +370,7 @@
         "inline": "会话内"
       },
       "mainAgent": "main（默认）",
+      "accountAgent": "由此账号关联的智能体决定。请在账号设置中修改。",
       "sessionReset": {
         "never": "永不",
         "afterInactivity": "无活动后",

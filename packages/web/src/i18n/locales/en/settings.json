@@ -370,6 +370,7 @@
         "inline": "Inline"
       },
       "mainAgent": "main (default)",
+      "accountAgent": "Set by this account's linked agent. Change it on the account.",
       "sessionReset": {
         "never": "Never",
         "afterInactivity": "After inactivity",

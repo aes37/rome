@@ -44,7 +44,7 @@ const defaults = {
 
 function item(input: {
   id: string;
-  service?: "discord" | "feishu";
+  service?: "discord" | "feishu" | "telegram" | "slack";
   name: string;
   supportedFields?: string[];
   overrides?: object;
@@ -249,6 +249,78 @@ describe("ChannelsSettingsPage", () => {
     expect(fetchMock.mock.calls.some(([request]) => String(request).includes("cursor=next"))).toBe(
       true,
     );
+  });
+
+  it("shows a linkable account's agent in place of the picker", async () => {
+    const connection = (service: string, linked: { linkedAgent?: string | null }) => ({
+      id: `${service}-1`,
+      service,
+      label: service,
+      grants: {},
+      display: {},
+      capabilities: {
+        talk: { state: "unlocked" },
+        act: { state: "unsupported" },
+        watch: { state: "unsupported" },
+      },
+      connect: null,
+      ...linked,
+    });
+    rs.spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/connections") {
+        return ok({
+          connections: [
+            connection("discord", { linkedAgent: "sales:agent" }),
+            connection("feishu", { linkedAgent: "core:main" }),
+            connection("telegram", { linkedAgent: null }),
+            // A core that predates links omits the field.
+            connection("slack", {}),
+          ],
+        });
+      }
+      if (url === "/api/agents") return ok({ agents: [{ name: "core:main" }] });
+      if (url.startsWith("/api/conversation-settings?")) {
+        return ok({
+          items: [
+            item({
+              id: "engineering",
+              name: "engineering",
+              overrides: { routing: { agentName: "coding:build" } },
+            }),
+            item({ id: "support", service: "feishu", name: "support" }),
+            item({ id: "ops", service: "telegram", name: "ops" }),
+            item({ id: "general", service: "slack", name: "general" }),
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch);
+
+    renderPage();
+    const card = async (name: string) =>
+      (await screen.findByRole("heading", { name: new RegExp(name) })).closest(
+        "article",
+      ) as HTMLElement;
+
+    const discord = await card("engineering");
+    expect(within(discord).queryByLabelText(/Agent/)).toBeNull();
+    expect(within(discord).getByText("agent · sales")).toBeTruthy();
+    expect(
+      within(discord).getByText("Set by this account's linked agent. Change it on the account."),
+    ).toBeTruthy();
+    // The stored agent choice no longer applies, so it is not counted.
+    expect(within(discord).queryByText(/override/)).toBeNull();
+
+    const feishu = await card("support");
+    expect(within(feishu).queryByLabelText(/Agent/)).toBeNull();
+    expect(within(feishu).getByText("main")).toBeTruthy();
+
+    const telegram = await card("ops");
+    expect(within(telegram).getByText("None. This account stays silent.")).toBeTruthy();
+
+    const slack = await card("general");
+    expect(within(slack).getByLabelText(/Agent/)).toBeTruthy();
   });
 
   it("creates no override when an edit is undone before the debounce elapses", async () => {

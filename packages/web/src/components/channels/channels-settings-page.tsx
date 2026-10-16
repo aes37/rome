@@ -46,7 +46,7 @@ import { Switch } from "@/components/ui/switch";
 import { artifactLocalName, artifactOwnerId } from "@/lib/artifact-name";
 import { serviceLabel } from "@/lib/connection-cards";
 import { fetchConnections, type ApiConnection } from "@/lib/connections-api";
-import { MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
+import { LINKABLE_SERVICES, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 
 interface PageResponse {
   items: ConversationSettingsListItem[];
@@ -132,6 +132,23 @@ export function ChannelsSettingsPage() {
         connection.id !== null && connection.capabilities.talk?.state !== "unsupported"
           ? [{ id: connection.id, label: connection.label }]
           : [],
+      ),
+    [connections],
+  );
+
+  // The agent linked to a linkable account answers every chat on it, so those
+  // chats have no agent of their own to pick. A core that predates links omits
+  // `linkedAgent`, and the picker stays.
+  const accountAgents = useMemo(
+    () =>
+      new Map(
+        connections.flatMap((connection) =>
+          connection.id !== null &&
+          LINKABLE_SERVICES.has(connection.service) &&
+          connection.linkedAgent !== undefined
+            ? [[connection.id, connection.linkedAgent]]
+            : [],
+        ),
       ),
     [connections],
   );
@@ -247,6 +264,7 @@ export function ChannelsSettingsPage() {
                 key={`${item.snapshot.conversation.ref.connectionId}:${item.snapshot.conversation.ref.conversationId}`}
                 item={item}
                 agentNames={agentNames}
+                accountAgent={accountAgents.get(item.snapshot.conversation.ref.connectionId)}
                 onSaved={handleSaved}
               />
             ))}
@@ -271,10 +289,14 @@ export function ChannelsSettingsPage() {
 function ConversationRow({
   item,
   agentNames,
+  accountAgent,
   onSaved,
 }: {
   item: ConversationSettingsListItem;
   agentNames: string[];
+  /** The agent the conversation's account answers as (null: none, so it stays
+   *  silent), or undefined when the conversation picks its own. */
+  accountAgent: string | null | undefined;
   onSaved: (snapshot: ConversationSettingsSnapshot) => void;
 }) {
   const { t } = useTranslation("settings");
@@ -284,8 +306,11 @@ function ConversationRow({
   const { snapshot } = item;
   const conversation = snapshot.conversation;
   const supported = new Set(snapshot.supportedFields);
+  // A stored agent choice no longer applies once the account decides.
   const overrideCount = snapshot.supportedFields.filter(
-    (field) => settingSource(snapshot, field) === "overridden",
+    (field) =>
+      settingSource(snapshot, field) === "overridden" &&
+      !(field === "routing.agentName" && accountAgent !== undefined),
   ).length;
   const [draft, setDraft] = useState<ConversationSettings>(() =>
     structuredClone(snapshot.effective),
@@ -572,7 +597,21 @@ function ConversationRow({
       </SettingSection>
 
       <SettingSection title={t("channels.conversationSettings.sections.routing")}>
-        {supported.has("routing.agentName") && (
+        {supported.has("routing.agentName") && accountAgent !== undefined && (
+          <SettingRow field="agent" overridden={false}>
+            <p className="text-ui text-foreground">
+              {accountAgent === null
+                ? t("connections.accounts.noAgent")
+                : accountAgent === MAIN_AGENT_ID
+                  ? "main"
+                  : agentOptionLabel(t, accountAgent)}
+            </p>
+            <p className="mt-1 text-aux text-muted-foreground">
+              {t("channels.conversationSettings.accountAgent")}
+            </p>
+          </SettingRow>
+        )}
+        {supported.has("routing.agentName") && accountAgent === undefined && (
           <SettingRow
             field="agent"
             overridden={settingSource(snapshot, "routing.agentName") === "overridden"}
@@ -588,11 +627,7 @@ function ConversationRow({
               <SelectContent>
                 {routingOptions.map((name) => (
                   <SelectItem key={name} value={name}>
-                    {name === "main"
-                      ? t("channels.conversationSettings.mainAgent")
-                      : [artifactLocalName(name), artifactOwnerId(name)]
-                          .filter((part): part is string => Boolean(part && part !== "core"))
-                          .join(" · ")}
+                    {agentOptionLabel(t, name)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -602,6 +637,14 @@ function ConversationRow({
       </SettingSection>
     </article>
   );
+}
+
+function agentOptionLabel(t: TFunction<"settings">, name: string): string {
+  if (name === "main" || name === MAIN_AGENT_ID)
+    return t("channels.conversationSettings.mainAgent");
+  return [artifactLocalName(name), artifactOwnerId(name)]
+    .filter((part): part is string => Boolean(part && part !== "core"))
+    .join(" · ");
 }
 
 /** Every control in the right-hand column lands on the same width. */
