@@ -124,6 +124,16 @@ describe("channel account routes", () => {
     expect(records.byId("feishu")?.agent).toBe("core:main");
   });
 
+  it("links main even when no binding names it", async () => {
+    const { records, link, db } = setup({});
+    records.claim(db, { id: "c1", service: "telegram" }, NOW);
+    records.claim(db, { id: "c2", service: "telegram" }, NOW);
+    const second = records.byConnection("c2")!.id;
+
+    expect((await link(second, "main")).status).toBe(200);
+    expect(records.byId(second)?.agent).toBe("core:main");
+  });
+
   it("keeps main on every account of one platform it is linked to", async () => {
     const { records, link, db } = setup({ main: "core:main" });
     records.claim(db, { id: "c1", service: "telegram" }, NOW);

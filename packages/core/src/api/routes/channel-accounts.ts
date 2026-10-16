@@ -1,5 +1,5 @@
-// Accounts and their linked agents. An account is a channel a Connection
-// backs, as the dashboard shows it. Vocabulary: docs/concepts/messaging.md#channels.
+// Accounts and their linked agents. An account is a channel, as the dashboard
+// shows it; one whose Connection was deleted is listed with no Connection. Vocabulary: docs/concepts/messaging.md#channels.
 // Invariants: docs/architecture/channels.md#linked-agents.
 
 import type {
@@ -7,6 +7,7 @@ import type {
   LinkAccountAgentRequest,
   LinkAccountAgentResult,
 } from "@rome/api-types/channel-accounts";
+import { isMainAgent, MAIN_AGENT_ID } from "@rome/api-types/linked-agents";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -56,10 +57,17 @@ export function channelAccountsRoutes(deps: Pick<ApiDeps, "db" | "agentLoader">)
     }
     let agent = parsed.data.agent;
     if (agent !== null) {
-      if (!deps.agentLoader.has(agent)) {
-        return c.json({ error: `Agent "${agent}" is not loaded.` }, 400);
+      if (isMainAgent(agent)) {
+        agent = MAIN_AGENT_ID;
+      } else {
+        // getCanonicalName throws for an agent a reload removed after has().
+        let canonical: string | null = null;
+        try {
+          if (deps.agentLoader.has(agent)) canonical = deps.agentLoader.getCanonicalName(agent);
+        } catch {}
+        if (canonical === null) return c.json({ error: `Agent "${agent}" is not loaded.` }, 400);
+        agent = canonical;
       }
-      agent = deps.agentLoader.getCanonicalName(agent);
     }
     const id = c.req.param("id");
     try {

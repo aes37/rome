@@ -71,7 +71,7 @@ interface ConnectHint {
 }
 
 interface ConnectionView
-  extends Required<Pick<ConnectionAccountFields, "channel" | "linkedAgent" | "severalAccounts">> {
+  extends Required<Pick<ConnectionAccountFields, "channel" | "severalAccounts">> {
   /** Ledger connection id, or null for an offerable placeholder — a registered
    *  service the guardian has never connected (nothing to address or tear down
    *  yet; the connect setup mints the row). */
@@ -152,7 +152,6 @@ function buildConnectionView(
     connect: connectHint(conn.service),
     setups: activeSetups(manager, conn.id, Object.keys(grants)),
     channel: channel?.id ?? null,
-    linkedAgent: channel?.agent ?? null,
     severalAccounts: registry.getDescriptor(conn.service)?.severalAccounts === true,
   };
 }
@@ -234,7 +233,6 @@ function placeholderView(
     connect: connectHint(service),
     setups: activeSetups(manager, service, grantNames),
     channel: null,
-    linkedAgent: null,
     severalAccounts: descriptor.severalAccounts === true,
   };
 }
