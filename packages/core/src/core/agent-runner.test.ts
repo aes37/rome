@@ -2305,9 +2305,10 @@ describe("AgentRunner", () => {
     describe("the outcome next() resolves with", () => {
       // A real chain whose outermost middleware records what next() resolves
       // with, so the chain's own next() is what is under test. `inner`, when
-      // given, is the body of a second middleware's handle(ctx, next).
+      // given, is the body of each further middleware's handle(ctx, next),
+      // outermost first.
       async function recordingChain(
-        inner?: string,
+        inner?: string | string[],
       ): Promise<{ chain: TurnMiddlewareChain; dir: string }> {
         const dir = await mkdtemp(join(tmpdir(), "rome-turnmw-outcome-"));
         const hookDir = (name: string) => join(dir, name);
@@ -2335,16 +2336,18 @@ describe("AgentRunner", () => {
           "utf-8",
         );
         const artifacts = [artifact("recorder")];
-        if (inner !== undefined) {
-          await mkdir(hookDir("inner"));
+        const bodies = inner === undefined ? [] : [inner].flat();
+        for (const [i, body] of bodies.entries()) {
+          const name = `inner${i}`;
+          await mkdir(hookDir(name));
           await writeFile(
-            join(hookDir("inner"), "index.js"),
+            join(hookDir(name), "index.js"),
             `export function createHook() {
-              return { order: 1, async handle(ctx, next) { ${inner} } };
+              return { order: ${i + 1}, async handle(ctx, next) { ${body} } };
             }\n`,
             "utf-8",
           );
-          artifacts.push(artifact("inner"));
+          artifacts.push(artifact(name));
         }
         const chain = createTurnMiddlewareChain();
         const failures = await chain.loadFromCatalog({
@@ -2365,7 +2368,11 @@ describe("AgentRunner", () => {
 
       async function outcomeOf(
         turnEvents: AgentEvent[],
-        options: { inner?: string; agentName?: string; provider?: MockModelProvider } = {},
+        options: {
+          inner?: string | string[];
+          agentName?: string;
+          provider?: MockModelProvider;
+        } = {},
       ): Promise<{ outcome: unknown; events: AgentEvent[] }> {
         mockProvider = options.provider ?? new MockModelProvider([turnEvents]);
         const { chain, dir } = await recordingChain(options.inner);
@@ -2436,6 +2443,42 @@ describe("AgentRunner", () => {
             provider: new SlowProvider([[{ type: "error", error: "provider down" }]]),
           }),
           { status: "error", suspended: false },
+        );
+      });
+
+      it("waits for a middleware further in that a middleware did not await", async () => {
+        // The middle middleware returns at once. The innermost one reaches the
+        // model only after its own I/O, so the outcome must wait for both.
+        expectOutcome(
+          await outcomeOf([{ type: "error", error: "provider down" }], {
+            inner: [
+              "void next();",
+              "await new Promise((resolve) => setTimeout(resolve, 50)); await next();",
+            ],
+          }),
+          { status: "error", suspended: false },
+        );
+      });
+
+      it("keeps the status turn_end reported when the send rejects after the terminal", async () => {
+        // The provider answers, then its send rejects once the turn has ended.
+        class LateRejectProvider extends MockModelProvider {
+          override async openSession(params: Parameters<MockModelProvider["openSession"]>[0]) {
+            const session = await super.openSession(params);
+            const send = session.sendUserInput.bind(session);
+            session.sendUserInput = async (input) => {
+              await send(input);
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              throw new Error("transport closed late");
+            };
+            return session;
+          }
+        }
+        expectOutcome(
+          await outcomeOf([], {
+            provider: new LateRejectProvider([[{ type: "result", content: "done" }]]),
+          }),
+          { status: "completed", suspended: false },
         );
       });
 

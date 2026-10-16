@@ -2476,6 +2476,10 @@ class AgentSessionImpl implements AgentSession {
   private publishTurnEnd(sink: TurnSink, terminal: AgentEvent): void {
     // Turns that fail before dispatchTurnStarted have no start timestamp;
     // report 0 rather than a since-epoch wall clock.
+    // A turn ends once. A late failure on a closed sink, such as a provider
+    // send that rejects after the model's terminal, publishes nothing, so it
+    // must not change the status the outcome reports either.
+    if (sink.done) return;
     const startMs = sink.lifecycleStartedAtMs;
     sink.endStatus = turnEndStatus(sink, terminal);
     this.publishOutbound(sink, {
@@ -3679,10 +3683,9 @@ class AgentSessionImpl implements AgentSession {
       };
 
       // What a middleware's next() resolves with: the status turn_end reports.
-      // An inner middleware that did not await next() returns while the model
-      // still runs, so this waits for the model's terminal.
-      const readOutcome = async (): Promise<TurnOutcome> => {
-        if (modelRan) await waitForSinkClose();
+      // The chain reads it once every layer inside has finished, including one
+      // an inner middleware started without awaiting next().
+      const readOutcome = (): TurnOutcome => {
         return {
           status: sink.endStatus ?? turnEndStatus(sink, shortCircuitTerminal()),
           suspended: sink.suspended,

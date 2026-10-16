@@ -60,8 +60,10 @@ export interface MiddlewareChain<Ctx, Outcome = void> {
    *  per-artifact load failures (a bad middleware is dropped, never fatal). */
   loadFromCatalog(catalog: AppCatalog): Promise<MiddlewareLoadFailure[]>;
   /** Execute the onion around `terminal`. With an empty chain this is exactly
-   *  `await terminal()`. Each middleware's `next()` resolves with
-   *  `readOutcome()`, read once the layers inside it have finished. A chain
+   *  `await terminal()`. Resolves once every layer has finished, including
+   *  layers a middleware started with an unawaited `next()`. Each
+   *  middleware's `next()` resolves with `readOutcome()`, read once the layers
+   *  inside it have finished. A chain
    *  whose `next()` resolves with nothing takes no reader. */
   run(ctx: Ctx, terminal: MiddlewareTerminal, ...outcome: OutcomeReaderArg<Outcome>): Promise<void>;
   /** Number of loaded middlewares (0 ⇒ pure passthrough). */
@@ -125,12 +127,14 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
         }
         const mw = chain[i];
         let nextCalled = false;
+        let inner: Promise<void> | undefined;
         const next = async (): Promise<Outcome> => {
           if (nextCalled) {
             throw new Error(`${hookName} middleware (${mw.appId}) called next() more than once`);
           }
           nextCalled = true;
-          await dispatch(i + 1);
+          inner = dispatch(i + 1);
+          await inner;
           return (await readOutcome?.()) as Outcome;
         };
         try {
@@ -139,6 +143,10 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
             { "hook.app_id": mw.appId, "hook.order": mw.hook.order },
             () => mw.hook.handle(ctx, next),
           );
+          // A middleware that calls next() without awaiting it returns while
+          // the layers inside it still run. Its layer ends when theirs do, and
+          // their failure is its own, as if it had awaited.
+          await inner;
         } catch (err) {
           const mode = mw.hook.onError ?? "fail-open";
           if (mode === "fail-closed") {
@@ -151,6 +159,7 @@ export function createMiddlewareChain<Ctx, Outcome = void>(
             error: err instanceof Error ? err.message : String(err),
           });
           if (!nextCalled) await next();
+          else await inner?.catch(() => {});
         }
       };
 
